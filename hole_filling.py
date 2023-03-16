@@ -1,14 +1,24 @@
 import torch
 import os
+import sys
+#================================================================
+mydir = os.path.dirname(os.path.abspath(__file__))
+lamadir = os.path.join(mydir,'lama')
+sys.path.append(lamadir)
+#================================================================
 from saicinpainting.training.data.datasets import make_default_val_dataset
 from saicinpainting.training.trainers import load_checkpoint
 from saicinpainting.utils import register_debug_signal_handlers
 from saicinpainting.evaluation.utils import move_to_device
 from saicinpainting.evaluation.refinement import refine_predict
+#================================================================
 from omegaconf import OmegaConf
 # import torch
 import yaml
+import sys
 # import os
+
+"""
 def holefill():
     pass
 def gpnn_holefill():
@@ -66,7 +76,9 @@ def gpnn_holefill():
         # import ipdb; ipdb.set_trace()
         gpnn_inpainting = gpnn(config)
         holefilled,holefilling_results = gpnn_inpainting.run(to_save=False)
+"""
 def lama_holefill(gen_image_np, worst_mask_np):
+
     predict_config = {'indir': '/root/evaluate-saliency-4/stable_diffusion/lama/LaMa_test_images', 'outdir': '/root/evaluate-saliency-4/stable_diffusion/lama/output', 'model': {'path': '/root/evaluate-saliency-4/stable_diffusion/lama/big-lama', 'checkpoint': 'best.ckpt'}, 'dataset': {'kind': 'default', 'img_suffix': '.png', 'pad_out_to_modulo': 8}, 'device': 'cuda', 'out_key': 'inpainted', 'refine': False, 'refiner': {'gpu_ids': '0,1', 'modulo': '${dataset.pad_out_to_modulo}', 'n_iters': 15, 'lr': 0.002, 'min_side': 512, 'max_scales': 3, 'px_budget': 1800000}}
 
 
