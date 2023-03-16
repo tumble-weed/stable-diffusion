@@ -1,4 +1,21 @@
-pip install diffusers transformers accelerate scipy safetensors
+# pip install diffusers
+git clone https://github.com/tumble-weed/diffusers.git
+pip install -e diffusers
+pip install  transformers accelerate scipy safetensors
+#------------------------------------------------------------------------------------
+#InSPyReNet
+git clone https://github.com/plemeri/InSPyReNet
+pip install -e InSPyReNet
+pip install easydict
+pip install timm
+#------------------------------------------------------------------------------------
+#lama inpainting
+pip install pytorch-lightning
+pip install hydra-core
+pip install albumentations
+pip install albumentations==0.5.2
+pip install webdataset
+#------------------------------------------------------------------------------------
 # pip install rembg
 pip install rembg[gpu]
 # https://drive.google.com/file/d/1Tag_nzrNDCmByC2tFlEFMTN0tiYaPCQ7/view?usp=sharing

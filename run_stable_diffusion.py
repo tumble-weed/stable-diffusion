@@ -179,59 +179,62 @@ def run(impath='flask3.jpg'):
         worst_mask_np /= 255.
     worst_mask_np = (worst_mask_np>0.).astype(np.float32)
     assert gen_image_np.max() <= 1
-    config = {
-        'out_dir':'stable-diffusion/output',
-        'iters':10,
-        # 'iters':1,#10
-        'coarse_dim':14,#
-        # 'coarse_dim':28,
-        # 'coarse_dim':100,#
-        'out_size':0,
-        'patch_size':7,
-        # 'patch_size':15,
-        'stride':1,
-        'pyramid_ratio':4/3,
-        # 'pyramid_ratio':2,
-        'faiss':True,
-        # 'faiss':False,
-        'no_cuda':False,
-        #---------------------------------------------
-        'in':None,
-        'sigma':4*0.75,
-        # 'sigma':0.3*0.75,
-        'alpha':0.005,
-        'task':'inpainting',
-        #---------------------------------------------
-        # 'input_img':original_imname,
-        # 'input_img':tensor_to_numpy(denormalize_imagenet(img.unsqueeze(0)).permute(0,2,3,1)[0]),
-        # 'input_img':skimage.transform.resize(np.array(image)/255.,(256,256)),
-        # 'input_img':(np.array(image)/255.),
-        'input_img':gen_image_np,
-        # NOTE: the mask arrives with 0's at holes. need to flip it
-        # 'mask':tensor_to_numpy(1 - mask),
-        'mask':worst_mask_np,
-        # 'mask':(skimage.transform.resize(mask.astype(np.float32),(256,256))>0.5).astype(np.float32),
-        'batch_size':10,
-        #---------------------------------------------
-        'implementation':'gpnn',#'efficient-gpnn','gpnn'
-        'init_from':'zeros',#'zeros','target'
-        'keys_type':'single-resolution',#'multi-resolution','single-resolution'
-        #---------------------------------------------
-        'use_pca':True,
-        'n_pca_components':30,
-        #---------------------------------------------
-        'patch_aggregation':'distance-weighted',#'uniform','distance-weighted','median'
-        # 'imagenet_target':imagenet_target
-        #---------------------------------------------
-        'index_type':'simple',
-        'use_xy':True,
-        }
-    # from model.my_gpnn_inpainting2 import gpnn
-    from model.my_gpnn_inpainting_for_sd import gpnn
-    import os
-
-    gpnn_inpainting = gpnn(config)
-    holefilled,holefilling_results = gpnn_inpainting.run(to_save=False)
+    if False and 'gpnn':
+        config = {
+            'out_dir':'stable-diffusion/output',
+            'iters':10,
+            # 'iters':1,#10
+            'coarse_dim':14,#
+            # 'coarse_dim':28,
+            # 'coarse_dim':100,#
+            'out_size':0,
+            'patch_size':7,
+            # 'patch_size':15,
+            'stride':1,
+            'pyramid_ratio':4/3,
+            # 'pyramid_ratio':2,
+            'faiss':True,
+            # 'faiss':False,
+            'no_cuda':False,
+            #---------------------------------------------
+            'in':None,
+            'sigma':4*0.75,
+            # 'sigma':0.3*0.75,
+            'alpha':0.005,
+            'task':'inpainting',
+            #---------------------------------------------
+            # 'input_img':original_imname,
+            # 'input_img':tensor_to_numpy(denormalize_imagenet(img.unsqueeze(0)).permute(0,2,3,1)[0]),
+            # 'input_img':skimage.transform.resize(np.array(image)/255.,(256,256)),
+            # 'input_img':(np.array(image)/255.),
+            'input_img':gen_image_np,
+            # NOTE: the mask arrives with 0's at holes. need to flip it
+            # 'mask':tensor_to_numpy(1 - mask),
+            'mask':worst_mask_np,
+            # 'mask':(skimage.transform.resize(mask.astype(np.float32),(256,256))>0.5).astype(np.float32),
+            'batch_size':10,
+            #---------------------------------------------
+            'implementation':'gpnn',#'efficient-gpnn','gpnn'
+            'init_from':'zeros',#'zeros','target'
+            'keys_type':'single-resolution',#'multi-resolution','single-resolution'
+            #---------------------------------------------
+            'use_pca':True,
+            'n_pca_components':30,
+            #---------------------------------------------
+            'patch_aggregation':'distance-weighted',#'uniform','distance-weighted','median'
+            # 'imagenet_target':imagenet_target
+            #---------------------------------------------
+            'index_type':'simple',
+            'use_xy':True,
+            }
+        # from model.my_gpnn_inpainting2 import gpnn
+        from model.my_gpnn_inpainting_for_sd import gpnn
+        # import ipdb; ipdb.set_trace()
+        gpnn_inpainting = gpnn(config)
+        holefilled,holefilling_results = gpnn_inpainting.run(to_save=False)
+    else:
+        from hole_filling import lama_holefill
+        holefilled = lama_holefill(gen_image_np, worst_mask_np)
     
     repasted = copy.deepcopy(tensor_to_numpy(holefilled[:,:3].permute(0,2,3,1)[0]))
     repasted = repasted*(1-large_mask_np) + (large_mask_np* large_image_np)
@@ -249,7 +252,10 @@ def run_on_folder(folder,results_root='results'):
         gen_image_np,repasted_np,extras = run(impath)
         rootname = os.path.basename(impath).split('.')[0]
         savefolder  = os.path.join(results_root,rootname)
-        os.makedirs(savefolder)
+        try:
+            os.makedirs(savefolder)
+        except FileExistsError:
+            pass
         skimage.io.imsave(os.path.join(savefolder,'generated.png'),gen_image_np)
         skimage.io.imsave(os.path.join(savefolder,'repasted.png'),repasted_np)
         skimage.io.imsave(os.path.join(savefolder,'holefilled.png'),extras['holefilled'])
