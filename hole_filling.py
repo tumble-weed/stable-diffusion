@@ -105,10 +105,10 @@ def lama_holefill(gen_image_np, worst_mask_np):
         
 
     #==================================================
-    from torch.utils.data._utils.collate import default_collate
-    dataset = make_default_val_dataset(predict_config["indir"], **predict_config["dataset"])
-    mask_fname = dataset.mask_filenames[0]
-    batch = default_collate([dataset[0]])
+    #from torch.utils.data._utils.collate import default_collate
+    #dataset = make_default_val_dataset(predict_config["indir"], **predict_config["dataset"])
+    #mask_fname = dataset.mask_filenames[0]
+    #batch = default_collate([dataset[0]])
     #==================================================
     device = 'cuda:0'
     gen_image_th = torch.tensor(gen_image_np).float().to(device).permute(2,0,1).unsqueeze(0)
