@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import os
 import sys
 #================================================================
@@ -17,7 +18,7 @@ from omegaconf import OmegaConf
 import yaml
 import sys
 # import os
-
+tensor_to_numpy = lambda t:t.detach().cpu().numpy()
 """
 def holefill():
     pass
@@ -78,14 +79,16 @@ def gpnn_holefill():
         holefilled,holefilling_results = gpnn_inpainting.run(to_save=False)
 """
 def lama_holefill(gen_image_np, worst_mask_np):
-
-    predict_config = {'indir': '/root/evaluate-saliency-4/stable_diffusion/lama/LaMa_test_images', 'outdir': '/root/evaluate-saliency-4/stable_diffusion/lama/output', 'model': {'path': '/root/evaluate-saliency-4/stable_diffusion/lama/big-lama', 'checkpoint': 'best.ckpt'}, 'dataset': {'kind': 'default', 'img_suffix': '.png', 'pad_out_to_modulo': 8}, 'device': 'cuda', 'out_key': 'inpainted', 'refine': False, 'refiner': {'gpu_ids': '0,1', 'modulo': '${dataset.pad_out_to_modulo}', 'n_iters': 15, 'lr': 0.002, 'min_side': 512, 'max_scales': 3, 'px_budget': 1800000}}
+    mydir = os.path.dirname(os.path.abspath(__file__))
+    predict_config = {'indir': os.path.join(mydir,'lama/LaMa_test_images'), 'outdir': os.path.join(mydir,'lama/output'), 'model': {'path': os.path.join(mydir,'lama/big-lama'), 'checkpoint': 'best.ckpt'}, 'dataset': {'kind': 'default', 'img_suffix': '.png', 'pad_out_to_modulo': 8}, 'device': 'cuda', 'out_key': 'inpainted', 'refine': True, 'refiner': {'gpu_ids': '0', 'modulo': 8, 'n_iters': 15, 'lr': 0.002, 'min_side': 32, 'max_scales': 3, 'px_budget': 1800000}}
 
 
     # predict_config = OmegaConf(predict_config)
 
-    device = torch.device(predict_config['device'])
-
+    # device = torch.device(predict_config['device'])
+    # device = 'cuda:0'
+    device = 'cuda'
+    
     train_config_path = os.path.join(predict_config["model"]['path'], 'config.yaml')
     with open(train_config_path, 'r') as f:
         train_config = OmegaConf.create(yaml.safe_load(f))
@@ -100,17 +103,17 @@ def lama_holefill(gen_image_np, worst_mask_np):
                                     predict_config["model"]["checkpoint"])
     model = load_checkpoint(train_config, checkpoint_path, strict=False, map_location='cpu')
     model.freeze()
-    if not predict_config.get('refine', False):
-        model.to(device)
+    # if not predict_config.get('refine', False):
+    model.to(device)
         
 
     #==================================================
     from torch.utils.data._utils.collate import default_collate
     dataset = make_default_val_dataset(predict_config["indir"], **predict_config["dataset"])
-    mask_fname = dataset.mask_filenames[0]
-    batch = default_collate([dataset[0]])
+    #mask_fname = dataset.mask_filenames[0]
+    #batch = default_collate([dataset[0]])
     #==================================================
-    device = 'cuda:0'
+    
     gen_image_th = torch.tensor(gen_image_np).float().to(device).permute(2,0,1).unsqueeze(0)
     # import ipdb; ipdb.set_trace()
     # worst_mask_th = torch.tensor(worst_mask_np).float().to(device).permute(2,0,1).unsqueeze(0)
@@ -122,9 +125,26 @@ def lama_holefill(gen_image_np, worst_mask_np):
     #=================================================
     # cur_res = refine_predict(batch, model, **predict_config.refiner)
     # cur_res = cur_res[0].permute(1,2,0).detach().cpu().numpy()
-
+    # import ipdb; ipdb.set_trace()
+    assert worst_mask_th.unique().shape[0] == 2
     batch_for_lama = {'image': gen_image_th, 'mask': worst_mask_th}
-    # cur_res = refine_predict(batch_for_lama, model, **predict_config["refiner"])
-    batch_for_lama_out = model(batch_for_lama)                    
-    holefilled = batch_for_lama_out['inpainted']        
+    if False:    
+        # using unrefined
+        # cur_res = refine_predict(batch_for_lama, model, **predict_config["refiner"])
+        batch_for_lama_out = model(batch_for_lama)                    
+        holefilled = batch_for_lama_out['inpainted']        
+    else:
+        # using refinement
+        from saicinpainting.evaluation.data import pad_img_to_modulo
+        pad_out_to_modulo = 8
+        # if self.pad_out_to_modulo is not None and self.pad_out_to_modulo > 1:
+        batch_for_lama['unpad_to_size'] = torch.tensor(batch_for_lama['image'].shape[2:]).unsqueeze(1)
+        image_np = tensor_to_numpy(batch_for_lama['image'])
+        mask_np = tensor_to_numpy(batch_for_lama['mask'])
+        batch_for_lama['image'] = np.stack([pad_img_to_modulo(image_np[i], pad_out_to_modulo) for i in range(image_np.shape[0])],axis=0)
+        batch_for_lama['mask'] = np.stack([pad_img_to_modulo(mask_np[i], pad_out_to_modulo) for i in range(mask_np.shape[0])],axis=0)        
+        batch_for_lama['image'] = torch.tensor(batch_for_lama['image']).float().to(device)
+        batch_for_lama['mask'] = torch.tensor(batch_for_lama['mask']).float().to(device)
+        holefilled = refine_predict(batch_for_lama, model, **predict_config['refiner'])
+        # import ipdb; ipdb.set_trace()
     return holefilled
