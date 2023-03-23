@@ -1,3 +1,6 @@
+pip install ipdb
+pip install jupyter
+pip install colorful
 # pip install diffusers
 git clone https://github.com/tumble-weed/diffusers.git
 pip install -e diffusers
@@ -10,11 +13,19 @@ pip install easydict
 pip install timm
 #------------------------------------------------------------------------------------
 #lama inpainting
+git clone https://github.com/tumble-weed/lama
 pip install pytorch-lightning
 pip install hydra-core
 pip install albumentations
 pip install albumentations==0.5.2
 pip install webdataset
+pip install pandas
+pip install kornia
+pip3 install wldhx.yadisk-direct
+cd lama
+curl -L $(yadisk-direct https://disk.yandex.ru/d/ouP6l8VJ0HpMZg) -o big-lama.zip
+unzip big-lama.zip
+cd -
 #------------------------------------------------------------------------------------
 # pip install rembg
 pip install rembg[gpu]
