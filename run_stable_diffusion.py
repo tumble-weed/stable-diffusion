@@ -13,6 +13,8 @@ from rembg import remove
 import dutils
 import copy
 import glob
+import colorful
+from utils import save_results
 tensor_to_numpy = lambda t:t.detach().cpu().numpy()
 
 
@@ -55,15 +57,18 @@ def prepare_image(impath):
         ImageDraw.Draw(mask_img_pil).polygon(polygon, outline=1, fill=1)
         mask_np = numpy.array(mask_img_pil)
     else:
-        # print('hi');import sys;sys.exit()
-        
-        mask_img_pil = remove(orig_img_pil) # remove background
-        mask_np = np.array(mask_img_pil).astype(np.float32)        
-        mask_np = mask_np[...,-1]
-        mask_np = np.stack([mask_np,mask_np,mask_np],axis=-1)
-        if mask_np.max() > 1:
-            mask_np = mask_np/255.
-        mask_np = (mask_np > 0.5).astype(np.float32)
+        if True:
+            mask_img_pil = remove(orig_img_pil) # remove background
+            mask_np = np.array(mask_img_pil).astype(np.float32)        
+            mask_np = mask_np[...,-1]
+            mask_np = np.stack([mask_np,mask_np,mask_np],axis=-1)
+            if mask_np.max() > 1:
+                mask_np = mask_np/255.
+            mask_np = (mask_np > 0.5).astype(np.float32)
+        else:
+            mask_np = create_mask(orig_img_np)
+            mask_np = (mask_np > 0.5).astype(np.float32)
+            # import ipdb; ipdb.set_trace()
         # mask_img_pil = Image.fromarray((mask_np*255.).astype(np.uint8)).convert('L')
         # import ipdb;ipdb.set_trace()
     # return orig_img_pil,mask_np,mask_img_pil
@@ -72,7 +77,18 @@ def prepare_image(impath):
 ####################################################################
 
 def place_in_large_image(orig_img_np,orig_mask_np):
-    target_height,target_width = 256,256
+    # target_height,target_width = 256,256
+    max_height, max_width = 312, 312
+    current_height,current_width =  orig_img_np.shape[:2]
+    if current_height > current_width:
+        target_height = max_height
+        target_width = (current_width/current_height) * target_height
+        target_width = int(target_width)
+    else:
+        target_width = max_width
+        target_height = (current_height/current_width) * target_width
+        target_height = int(target_height)        
+    # import pdb; pdb.set_trace()
     if False:
         obj_height = orig_mask_np[...,0].sum(axis=0).max()
         obj_width = orig_mask_np[...,0].sum(axis=1).max()
@@ -101,7 +117,9 @@ def place_in_large_image(orig_img_np,orig_mask_np):
     small_mask_np = skimage.transform.resize(orig_mask_np,(target_height,target_width))
     assert small_mask_np.max() <= 1
     max_val = 1
-    small_out_np = np.where(small_mask_np == (max_val,max_val,max_val), small_res_np, small_canvas_np)
+    # small_out_np = np.where(small_mask_np == (max_val,max_val,max_val), small_res_np, small_canvas_np)
+    small_out_np = small_res_np * small_mask_np +  small_canvas_np * (1- small_mask_np)
+    print(small_out_np.shape)
     #==============================================================
     
     large_img_np = np.full((512,512,3), 1.)
@@ -110,13 +128,15 @@ def place_in_large_image(orig_img_np,orig_mask_np):
     x_offset = (512 - target_width)//2
     large_img_np[y_offset:y_offset+small_out_np.shape[0], x_offset:x_offset+small_out_np.shape[1]] = small_out_np
 
-    large_mask_np = np.full((512,512,3), 0)
+    large_mask_np = np.full((512,512,3), 0,dtype=np.float32)
     large_mask_np[y_offset:y_offset+small_out_np.shape[0], x_offset:x_offset+small_out_np.shape[1]] = small_mask_np
     #==============================================================
-    
+    # pdb.set_trace()
+    # import ipdb; ipdb.set_trace()
     return large_img_np,large_mask_np
 
-def create_mask(img_np):
+def create_mask_(img_np):
+    # import ipdb; ipdb.set_trace()
     assert img_np.max() <= 1
     img_pil = Image.fromarray((img_np*255.).astype(np.uint8)).convert('L')
     mask_pil = remove(img_pil) # remove background
@@ -128,8 +148,57 @@ def create_mask(img_np):
         mask_np = mask_np/255.
     mask_np = np.stack([mask_np,mask_np,mask_np],axis=-1)
     return mask_np
+def create_mask(img_np):
+    '''
+    will run create_mask_ at multiple scales and aggregate the results
+    '''
+    print(colorful.green("TODO: determine min and max scale according to the relative size of the object segmented at scale 1."))
+    min_scale,max_scale = 0.75,1.5
+    n_scales = 5
+    scales = np.linspace(min_scale,max_scale,n_scales)
+    mask_np = 0
+    for s in scales:
+        if img_np.ndim ==2:
+            img_s = skimage.transform.rescale(img_np,s)
+        else:
+            img_s = np.stack([skimage.transform.rescale(img_np[...,i],s) for i in range(img_np.shape[-1])],axis=-1)
+        #import ipdb; ipdb.set_trace()
+        mask_s = create_mask_(img_s)
+        if mask_s.ndim ==2:
+            mask_s = skimage.transform.rescale(mask_s,1/s)
+        else:
+            mask_s = np.stack([skimage.transform.rescale(mask_s[...,i],1/s) for i in range(mask_s.shape[-1])],axis=-1)
+        mask_np = np.maximum(mask_np,mask_s)
+    # mask_np = mask_np/n_scales
+    return mask_np
+def repaste_after_downshift(holefilled_np,large_mask_np_float,large_image_np,gen_mask_np,large_mask_np):
+    # shift the object in large_image downwards
+    Y,X = np.meshgrid(np.arange(gen_mask_np.shape[0]),np.arange(gen_mask_np.shape[1]),indexing='ij')
+    YX = np.stack([Y,X],axis=-1)
+    lowest_gen = (gen_mask_np.mean(axis=-1) * Y).argmax(axis=0).max()
+    lowest_large = (large_mask_np.mean(axis=-1) * Y).argmax(axis=0).max()
+    to_move = 0
+    if lowest_gen > lowest_large:
+        to_move = lowest_gen - lowest_large
+        # if to_move > 30:
+        #     os.environ['shifted_down'] = '1'
+        new_large_image_np = np.zeros(large_image_np.shape)
+        new_large_image_np[to_move:,...] = large_image_np[:-to_move]
+        
+        new_large_mask_np_float = np.zeros(large_mask_np.shape)
+        new_large_mask_np_float[to_move:,...] = large_mask_np_float[:-to_move]
+    else:
+        new_large_mask_np_float = large_mask_np_float
+        new_large_image_np = large_image_np
+    repasted = holefilled_np*(1-new_large_mask_np_float) + (new_large_image_np* new_large_mask_np_float)
+    return repasted
 
 def holefill_and_repaste(large_image_np,gen_image_np,gen_mask_np,large_mask_np):
+    large_mask_np_float = large_mask_np
+    # NOTE: use threshold of 0 here to make a large mask to fill
+    large_mask_np = (large_mask_np_float > 0.).astype(np.float32)
+    gen_mask_np = (gen_mask_np > 0.).astype(np.float32)
+    
     worst_mask_np = np.maximum(gen_mask_np[...,-1].astype(np.float32),
                                 large_mask_np[...,-1].astype(np.float32))
     if worst_mask_np.max() > 1:
@@ -194,8 +263,19 @@ def holefill_and_repaste(large_image_np,gen_image_np,gen_mask_np,large_mask_np):
         from hole_filling import lama_holefill
         holefilled = lama_holefill(gen_image_np, worst_mask_np)
     
-    repasted = copy.deepcopy(tensor_to_numpy(holefilled[:,:3].permute(0,2,3,1)[0]))
-    repasted = repasted*(1-large_mask_np) + (large_mask_np* large_image_np)
+    # repasted = copy.deepcopy(tensor_to_numpy(holefilled[:,:3].permute(0,2,3,1)[0]))
+    holefilled_np = copy.deepcopy(tensor_to_numpy(holefilled[:,:3].permute(0,2,3,1)[0]))
+    # import ipdb; ipdb.set_trace()
+    if False:
+        repasted = holefilled_np*(1-large_mask_np_float) + (large_image_np* large_mask_np_float)
+    else:
+        repasted = repaste_after_downshift(holefilled_np,large_mask_np_float,large_image_np,gen_mask_np,large_mask_np)
+
+            
+        
+        
+    # import ipdb; ipdb.set_trace()
+    
     return repasted,holefilled
 def vae_encode_decode(repasted_np,pipe):
     assert repasted_np.min() >= 0. 
@@ -264,35 +344,13 @@ def run(impath='flask3.jpg'):
         #     large_img_mask_np = large_img_mask_np/255.
         # if gen_mask_np.max() >1:
         #     gen_mask_np = gen_mask_np/255.
+        large_mask_np_float = large_mask_np
         large_mask_np = (large_mask_np>0.5).astype(np.float32)
-        mask_np = (gen_mask_np>0.5).astype(np.float32)
-        
-    else:
-        # gen_image_np = skimage.io.imread('debug-results/generated1.png')
-        # gen_image_np = skimage.io.imread('generated1.png')
-        gen_image_np = skimage.io.imread('gen_image_np.png')
-        
-        if gen_image_np.max() > 1:
-            gen_image_np = gen_image_np/255.
-        if gen_image_np.dtype == np.uint8:
-            gen_image_np = gen_image_np.astype(np.float32)
-        # large_img_mask_np,gen_mask_np,gen_image_np = create_masks(orig_img_pil,gen_image_np)
-        gen_mask_np = create_mask(gen_image_np)
-        assert gen_mask_np.max() <= 1
-        assert large_mask_np.max() <= 1
-        # mask_np = mask_np[...,-1]
-        # large_img_mask_np = large_img_mask_np[...,-1]
-        large_mask_np = (large_mask_np>0.5).astype(np.float32)
-        mask_np = (gen_mask_np>0.5).astype(np.float32)
-        #..........................................    
-        # if large_img_mask_np.max() >1:
-        #     large_img_mask_np = large_img_mask_np/255.
-        # if gen_mask_np.max() >1:
-        #     gen_mask_np = gen_mask_np/255.
-        # large_img_mask_np = (large_img_mask_np>0.5).astype(np.float32)
         # mask_np = (gen_mask_np>0.5).astype(np.float32)
+        
+
     
-    repasted_np,holefilled = holefill_and_repaste(large_image_np,gen_image_np,gen_mask_np,large_mask_np)    
+    repasted_np,holefilled = holefill_and_repaste(large_image_np,gen_image_np,gen_mask_np,large_mask_np_float)    
     
     holefilled_np = tensor_to_numpy(holefilled[:,:3].permute(0,2,3,1)[0])
     extras = {'holefilled':holefilled_np,'initial_repasted':repasted_np}
@@ -318,47 +376,38 @@ def run(impath='flask3.jpg'):
         
     # import ipdb; ipdb.set_trace()
     # return     
-    return gen_image_np,repasted2_np,extras
+    return gen_image_np,repasted2_np,extras, large_image_np
 
 def run_on_folder(folder,results_root='results'):
     if not os.path.isdir(results_root):
         os.makedirs(results_root)
     for impath in glob.glob(os.path.join(folder,'*')):
-        
-        gen_image_np,repasted_np,extras = run(impath)
-        rootname = os.path.basename(impath).split('.')[0]
-        savefolder  = os.path.join(results_root,rootname)
-        try:
-            os.makedirs(savefolder)
-        except FileExistsError:
-            pass
-        skimage.io.imsave(os.path.join(savefolder,'generated.png'),gen_image_np)
-        skimage.io.imsave(os.path.join(savefolder,'repasted.png'),repasted_np)
-        skimage.io.imsave(os.path.join(savefolder,'holefilled.png'),extras['holefilled'])
-        skimage.io.imsave(os.path.join(savefolder,'initial_repasted.png'),extras['initial_repasted'])
+        print(impath)
+        gen_image_np,repasted_np,extras, inp_image_np = run(impath)
+
+        save_results(impath,results_root,
+                     gen_image_np,repasted_np,inp_image_np,extras)
+        # break
+        if os.environ.get('DBG_SHIFTED_DOWN',False) == '1':
+            import sys
+            sys.exit()
 
 if __name__ == '__main__':
-    
-    if False and 'single image':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--sync',action="store_true",default=False)
+    parser.add_argument('--folder',type=str,default=None)
+    parser.add_argument('--results-root',type=str,default='results')
+    args = parser.parse_args()
+    if False and 'run on single image':
         impath = 'flask3.jpg'
         gen_image_np,repasted_np,extras = run(impath)
-    # assert False
     if True and 'folder':
-        folder = 'products'
-        
-        run_on_folder(folder,results_root='results')
-    """
-    dutils.img_save(tensor_to_numpy(holefilled[:,:3].permute(0,2,3,1)[0]),f'stable-filled.png')
-    dutils.img_save(gen_image_np,f'generated1.png')
-    
-    
-    # large_img_mask_ = large_img_mask_np/255.
-    assert large_mask_np.max() <= 1.
-    # orig_img_ = np.array(orig_img)/255.
-    # orig_img_ = np.array(large_image_pil)/255.
-    
-    # orig_img_ = skimage.transform.resize(orig_img_,(256,256))
+        folder = args.folder
+        results_folder = f'results'
+        if True:
+            run_on_folder(folder,results_root=results_folder)
+        #--------------------------------------------
+        if args.sync:
 
-    
-    dutils.img_save(repasted,f'repasted.png')
-    """
+            os.system(f'rclone sync -Pv {results_folder} aniket-gdrive:stable-diffusion-experiments/{results_folder}')
