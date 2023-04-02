@@ -1,4 +1,4 @@
-
+import setup
 from diffusers import StableDiffusionInpaintPipeline
 import torch
 import matplotlib.pyplot as plt 
@@ -14,10 +14,16 @@ import dutils
 import copy
 import glob
 import colorful
+import debug
 from utils import save_results
+import utils
+from bg_removal_clip import bgremove_clip
 tensor_to_numpy = lambda t:t.detach().cpu().numpy()
-
-
+HARMONIZE = True
+USE_CLIPSEG = False
+if os.environ.get('USE_CLIPSEG',None) == "1":
+    USE_CLIPSEG = True
+debug.DEBUG_HARMONIZATION = True
 ####################################################################
 # flags for holefilling
 os.environ['DBG_IGNORE_RESIZE']='1'
@@ -58,9 +64,15 @@ def prepare_image(impath):
         mask_np = numpy.array(mask_img_pil)
     else:
         if True:
-            mask_img_pil = remove(orig_img_pil) # remove background
-            mask_np = np.array(mask_img_pil).astype(np.float32)        
-            mask_np = mask_np[...,-1]
+            # import ipdb; ipdb.set_trace()            
+            if False and USE_CLIPSEG:
+                mask_np = bgremove_clip(orig_img_np,["flask"],max_val=255)
+                # (mask_np == 255).astype(np.uint8).sum()
+                utils.cipdb('DBG_CLIPSEG')
+            else:
+                mask_img_pil = remove(orig_img_pil) # remove background
+                mask_np = np.array(mask_img_pil).astype(np.float32)        
+                mask_np = mask_np[...,-1]
             mask_np = np.stack([mask_np,mask_np,mask_np],axis=-1)
             if mask_np.max() > 1:
                 mask_np = mask_np/255.
@@ -138,15 +150,20 @@ def place_in_large_image(orig_img_np,orig_mask_np):
 def create_mask_(img_np):
     # import ipdb; ipdb.set_trace()
     assert img_np.max() <= 1
-    img_pil = Image.fromarray((img_np*255.).astype(np.uint8)).convert('L')
-    mask_pil = remove(img_pil) # remove background
-    mask_np = np.array(mask_pil)
-    assert mask_np.ndim == 3
-    assert mask_np.shape[-1] == 4
-    mask_np = mask_np[...,-1]
-    if mask_np.max() > 1:
-        mask_np = mask_np/255.
-    mask_np = np.stack([mask_np,mask_np,mask_np],axis=-1)
+    if USE_CLIPSEG:        
+        mask_np = bgremove_clip(img_np,["flask"],max_val=1)        
+        mask_np = np.stack([mask_np,mask_np,mask_np],axis=-1)
+        utils.cipdb('DBG_CLIPSEG')
+    else:
+        img_pil = Image.fromarray((img_np*255.).astype(np.uint8)).convert('L')
+        mask_pil = remove(img_pil) # remove background
+        mask_np = np.array(mask_pil)
+        assert mask_np.ndim == 3
+        assert mask_np.shape[-1] == 4
+        mask_np = mask_np[...,-1]
+        if mask_np.max() > 1:
+            mask_np = mask_np/255.
+        mask_np = np.stack([mask_np,mask_np,mask_np],axis=-1)
     return mask_np
 def create_mask(img_np):
     '''
@@ -191,6 +208,17 @@ def repaste_after_downshift(holefilled_np,large_mask_np_float,large_image_np,gen
         new_large_mask_np_float = large_mask_np_float
         new_large_image_np = large_image_np
     repasted = holefilled_np*(1-new_large_mask_np_float) + (new_large_image_np* new_large_mask_np_float)
+    if HARMONIZE:
+        from harmonize import harmonize
+        repasted_pre = repasted
+        debug.repasted_pre = repasted_pre
+        if new_large_mask_np_float.ndim == 3:
+            new_large_mask_np_float_2d = new_large_mask_np_float[...,:1]
+        elif new_large_mask_np_float.ndim == 2:
+            new_large_mask_np_float_2d = new_large_mask_np_float[...,None]
+        repasted = harmonize(repasted_pre,
+        new_large_mask_np_float_2d,device=None)
+        # import ipdb; ipdb.set_trace()
     return repasted
 
 def holefill_and_repaste(large_image_np,gen_image_np,gen_mask_np,large_mask_np):
@@ -201,10 +229,13 @@ def holefill_and_repaste(large_image_np,gen_image_np,gen_mask_np,large_mask_np):
     
     worst_mask_np = np.maximum(gen_mask_np[...,-1].astype(np.float32),
                                 large_mask_np[...,-1].astype(np.float32))
+
     if worst_mask_np.max() > 1:
         assert False
         worst_mask_np /= 255.
     worst_mask_np = (worst_mask_np>0.).astype(np.float32)
+
+
     assert gen_image_np.max() <= 1
     if False and 'gpnn':
         config = {
@@ -300,7 +331,8 @@ def run(impath='flask3.jpg'):
     
     large_image_np,large_mask_np = place_in_large_image(orig_img_np,orig_mask_np)
     inverted_large_mask_np = 1 - large_mask_np
-    if True:
+    GOOD = False
+    while not GOOD:
         ## Testing the Stable Diffusion: 
         prompt = "hyperrealistic photo of the object lying on a table in front of nigara falls. HD, 4K, 8K, render, lens flare, product photo, generate new prospective"
         neg_prompt = 'ugly, black and white, blurr, oversaturated, 3d, render, cartoon, fusioned, deformed, mutant, bad anatomy, extra hands and fingers'
@@ -312,8 +344,10 @@ def run(impath='flask3.jpg'):
         inverted_large_mask_pil = Image.fromarray((inverted_large_mask_np*255.).astype(np.uint8)).convert('RGB')
         large_image_pil = Image.fromarray((large_image_np*255.).astype(np.uint8)).convert('RGB')
         # import ipdb; ipdb.set_trace()
-        
-        new_image_obj = pipe(prompt=prompt, image=large_image_pil, mask_image=inverted_large_mask_pil, negative_prompt=neg_prompt, num_inference_steps=50,
+        num_inference_steps = 50
+        if os.environ.get('DBG_FAST_SD',False):
+            num_inference_steps = int(os.environ['DBG_FAST_SD'])
+        new_image_obj = pipe(prompt=prompt, image=large_image_pil, mask_image=inverted_large_mask_pil, negative_prompt=neg_prompt, num_inference_steps=num_inference_steps,
                         guidance_scale=8)
         gen_image_pil = new_image_obj.images[0]
         gen_image_np = np.array(gen_image_pil)/255.
@@ -346,6 +380,16 @@ def run(impath='flask3.jpg'):
         #     gen_mask_np = gen_mask_np/255.
         large_mask_np_float = large_mask_np
         large_mask_np = (large_mask_np>0.5).astype(np.float32)
+        
+        area_discrepancy = np.abs(gen_mask_np[:,:,-1] - large_mask_np[:,:,-1]).sum()/np.abs(large_mask_np[:,:,-1]).sum()
+        # area_discrepancy2 = worst_mask_np[:,:].sum()/large_mask_np[:,:,-1].sum()
+        print(colorful.red("remove images that have large holes"))
+        print(area_discrepancy)
+        if area_discrepancy < 0.2:
+            GOOD = True
+        else:
+            print(colorful.yellow("too large a difference in sizes of generated object and original object, redoing"))
+        # import ipdb; ipdb.set_trace()        
         # mask_np = (gen_mask_np>0.5).astype(np.float32)
         
 
@@ -387,6 +431,10 @@ def run_on_folder(folder,results_root='results'):
 
         save_results(impath,results_root,
                      gen_image_np,repasted_np,inp_image_np,extras)
+        if os.environ.get('DEBUG_HARMONIZATION',False) == '1':
+            save_results(impath,results_root,
+                     gen_image_np,debug.repasted_pre,inp_image_np,extras,save_prefix='generated_no_harmonization')
+            
         # break
         if os.environ.get('DBG_SHIFTED_DOWN',False) == '1':
             import sys
@@ -397,17 +445,16 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--sync',action="store_true",default=False)
     parser.add_argument('--folder',type=str,default=None)
-    parser.add_argument('--results-root',type=str,default='results')
+    parser.add_argument('--results_root',type=str,default='results')
     args = parser.parse_args()
     if False and 'run on single image':
         impath = 'flask3.jpg'
         gen_image_np,repasted_np,extras = run(impath)
     if True and 'folder':
         folder = args.folder
-        results_folder = f'results'
+        results_folder = args.results_root
         if True:
             run_on_folder(folder,results_root=results_folder)
         #--------------------------------------------
         if args.sync:
-
             os.system(f'rclone sync -Pv {results_folder} aniket-gdrive:stable-diffusion-experiments/{results_folder}')
