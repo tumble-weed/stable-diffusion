@@ -47,3 +47,14 @@ gdown 109HBAFijbxgu6rdRhAA_g42m49HdYZs3
 # flask 1 with green background
 gdown 1YeGxoDdDauy0BLzYX0oJ4bs_c4-yGfBA
 #.................................................................................
+# harmonization
+
+#.................................................................................
+# clip
+#download clipseg
+pip install -e clipseg
+bash clipseg/setup_clip.sh
+
+#.................................................................................
+# controlnet
+pip install controlnet_aux
