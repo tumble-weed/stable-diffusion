@@ -49,7 +49,7 @@ gdown 1YeGxoDdDauy0BLzYX0oJ4bs_c4-yGfBA
 #.................................................................................
 
 # harmonization
-
+git clone https://github.com/tumble-weed/Harmonizer
 #.................................................................................
 # clip
 #download clipseg
