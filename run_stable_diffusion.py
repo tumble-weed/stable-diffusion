@@ -14,10 +14,12 @@ import dutils
 import copy
 import glob
 import colorful
+
 import debug
 from utils import save_results
 import utils
 from bg_removal_clip import bgremove_clip
+
 tensor_to_numpy = lambda t:t.detach().cpu().numpy()
 HARMONIZE = True
 USE_CLIPSEG = False
@@ -73,6 +75,7 @@ def prepare_image(impath):
                 mask_img_pil = remove(orig_img_pil) # remove background
                 mask_np = np.array(mask_img_pil).astype(np.float32)        
                 mask_np = mask_np[...,-1]
+
             mask_np = np.stack([mask_np,mask_np,mask_np],axis=-1)
             if mask_np.max() > 1:
                 mask_np = mask_np/255.
@@ -188,6 +191,7 @@ def create_mask(img_np):
         mask_np = np.maximum(mask_np,mask_s)
     # mask_np = mask_np/n_scales
     return mask_np
+
 def repaste_after_downshift(holefilled_np,large_mask_np_float,large_image_np,gen_mask_np,large_mask_np):
     # shift the object in large_image downwards
     Y,X = np.meshgrid(np.arange(gen_mask_np.shape[0]),np.arange(gen_mask_np.shape[1]),indexing='ij')
@@ -208,6 +212,7 @@ def repaste_after_downshift(holefilled_np,large_mask_np_float,large_image_np,gen
         new_large_mask_np_float = large_mask_np_float
         new_large_image_np = large_image_np
     repasted = holefilled_np*(1-new_large_mask_np_float) + (new_large_image_np* new_large_mask_np_float)
+
     if HARMONIZE:
         from harmonize import harmonize
         repasted_pre = repasted
@@ -219,6 +224,7 @@ def repaste_after_downshift(holefilled_np,large_mask_np_float,large_image_np,gen
         repasted = harmonize(repasted_pre,
         new_large_mask_np_float_2d,device=None)
         # import ipdb; ipdb.set_trace()
+
     return repasted
 
 def holefill_and_repaste(large_image_np,gen_image_np,gen_mask_np,large_mask_np):
@@ -380,6 +386,7 @@ def run(impath='flask3.jpg'):
         #     gen_mask_np = gen_mask_np/255.
         large_mask_np_float = large_mask_np
         large_mask_np = (large_mask_np>0.5).astype(np.float32)
+
         
         area_discrepancy = np.abs(gen_mask_np[:,:,-1] - large_mask_np[:,:,-1]).sum()/np.abs(large_mask_np[:,:,-1]).sum()
         # area_discrepancy2 = worst_mask_np[:,:].sum()/large_mask_np[:,:,-1].sum()
@@ -390,6 +397,7 @@ def run(impath='flask3.jpg'):
         else:
             print(colorful.yellow("too large a difference in sizes of generated object and original object, redoing"))
         # import ipdb; ipdb.set_trace()        
+
         # mask_np = (gen_mask_np>0.5).astype(np.float32)
         
 
@@ -451,6 +459,7 @@ if __name__ == '__main__':
         impath = 'flask3.jpg'
         gen_image_np,repasted_np,extras = run(impath)
     if True and 'folder':
+
         folder = args.folder
         results_folder = args.results_root
         if True:
@@ -458,3 +467,4 @@ if __name__ == '__main__':
         #--------------------------------------------
         if args.sync:
             os.system(f'rclone sync -Pv {results_folder} aniket-gdrive:stable-diffusion-experiments/{results_folder}')
+
