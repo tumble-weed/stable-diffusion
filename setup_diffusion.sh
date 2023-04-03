@@ -53,6 +53,7 @@ gdown 1YeGxoDdDauy0BLzYX0oJ4bs_c4-yGfBA
 #.................................................................................
 # clip
 #download clipseg
+git clone https://github.com/tumble-weed/clipseg
 pip install -e clipseg
 bash clipseg/setup_clip.sh
 
