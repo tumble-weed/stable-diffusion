@@ -1,4 +1,17 @@
-import setup
+import builtins
+import ipdb
+builtins.ipdb = ipdb
+import importlib
+builtins.importlib = importlib
+import sys
+sys.path.append('/home/ubuntu/stable-diffusion/clipseg/models')
+builtins.sys = sys
+import os
+builtins.os = os
+import torch
+builtins.torch = torch
+import numpy as np
+builtins.np = np
 from diffusers import StableDiffusionInpaintPipeline
 import torch
 import matplotlib.pyplot as plt 
@@ -18,7 +31,7 @@ import colorful
 import debug
 from utils import save_results
 import utils
-from bg_removal_clip import bgremove_clip
+#from bg_removal_clip import bgremove_clip
 
 tensor_to_numpy = lambda t:t.detach().cpu().numpy()
 HARMONIZE = True
@@ -41,9 +54,14 @@ def init_sd(device = "cuda"):
     return pipe
 ####################################################################
 
-def prepare_image(impath):
+def prepare_image(impath=None,im_np=None):
     # import ipdb; ipdb.set_trace()
-    orig_img_pil = Image.open(impath).convert('RGB')
+    if im_np is None:
+        assert impath is not None
+        orig_img_pil = Image.open(impath).convert('RGB')
+    else:
+        assert im_np.dtype == np.uint8,f'expecting the dtype of im_np to be uint8, but got {im_np.dtype}'
+        orig_img_pil = Image.fromarray(im_np)
     width = orig_img_pil.size[0]
     height = orig_img_pil.size[1]
     orig_img_np = np.array(orig_img_pil)
@@ -329,9 +347,14 @@ def vae_encode_decode(repasted_np,pipe):
     repasted2_np = tensor_to_numpy(repasted2.permute(0, 2, 3, 1))[0]
     return repasted2_np
 # assert False
-def run(impath='flask3.jpg'):
+def run(impath=None,
+		im_np=None,
+        prompt = "hyperrealistic photo of the object lying on a table in front of nigara falls. HD, 4K, 8K, render, lens flare, product photo, generate new prospective",
+        neg_prompt = 'ugly, black and white, blurr, oversaturated, 3d, render, cartoon, fusioned, deformed, mutant, bad anatomy, extra hands and fingers'
+
+):
     
-    orig_img_np,orig_mask_np = prepare_image(impath)
+    orig_img_np,orig_mask_np = prepare_image(impath=impath,im_np=im_np)
 
     # import ipdb; ipdb.set_trace()
     
@@ -340,9 +363,6 @@ def run(impath='flask3.jpg'):
     GOOD = False
     while not GOOD:
         ## Testing the Stable Diffusion: 
-        prompt = "hyperrealistic photo of the object lying on a table in front of nigara falls. HD, 4K, 8K, render, lens flare, product photo, generate new prospective"
-        neg_prompt = 'ugly, black and white, blurr, oversaturated, 3d, render, cartoon, fusioned, deformed, mutant, bad anatomy, extra hands and fingers'
-
         #new_image = pipe(prompt=prompt, image=image, mask_image=inverted_mask, negative_prompt=neg_prompt, num_inference_steps=50,
                         #guidance_scale=8).images[0]
         
@@ -435,7 +455,16 @@ def run_on_folder(folder,results_root='results'):
         os.makedirs(results_root)
     for impath in glob.glob(os.path.join(folder,'*')):
         print(impath)
-        gen_image_np,repasted_np,extras, inp_image_np = run(impath)
+        if False:
+            im = skimage.io.imread(impath)
+            if im.dtype != np.uint8:
+                im = (im * 255).astype(np.uint8)
+            gen_image_np,repasted_np,extras, inp_image_np = run(im_np=im)
+        else:
+            gen_image_np,repasted_np,extras, inp_image_np = run(impath=impath)
+        
+
+        
 
         save_results(impath,results_root,
                      gen_image_np,repasted_np,inp_image_np,extras)
