@@ -1,6 +1,8 @@
 pip install ipdb
 pip install jupyter
 pip install colorful
+pip install cloudinary
+pip install waitress
 # pip install diffusers
 git clone https://github.com/tumble-weed/diffusers.git
 pip install -e diffusers
@@ -60,4 +62,7 @@ bash clipseg/setup_clip.sh
 #.................................................................................
 # controlnet
 pip install controlnet_aux
-
+#.................................................................................
+# xformers
+pip install xformers
+pip install deepspeed

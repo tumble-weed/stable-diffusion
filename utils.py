@@ -6,6 +6,10 @@ if not os.path.isdir(DEBUG_DIR):
     os.makedirs(DEBUG_DIR)
 def save_img(img_np,savename,savefolder=DEBUG_DIR,sync=False):
     full_savename = os.path.join(savefolder,savename)
+    if 'float' in str(img_np.dtype):
+        assert img_np.max() <= 1.
+        assert img_np.min() >= 0.
+        img_np = (img_np * 255).astype(np.uint8)
     skimage.io.imsave(full_savename,img_np)
     if sync:
         os.system(f'rclone sync -Pv {full_savename} aniket-gdrive:stable-diffusion-experiments/debugging')
