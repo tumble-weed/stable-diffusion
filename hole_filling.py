@@ -78,7 +78,7 @@ def gpnn_holefill():
         gpnn_inpainting = gpnn(config)
         holefilled,holefilling_results = gpnn_inpainting.run(to_save=False)
 """
-def lama_holefill(gen_image_np, worst_mask_np):
+def get_lama_model():
     mydir = os.path.dirname(os.path.abspath(__file__))
     predict_config = {'indir': os.path.join(mydir,'lama/LaMa_test_images'), 'outdir': os.path.join(mydir,'lama/output'), 'model': {'path': os.path.join(mydir,'lama/big-lama'), 'checkpoint': 'best.ckpt'}, 'dataset': {'kind': 'default', 'img_suffix': '.png', 'pad_out_to_modulo': 8}, 'device': 'cuda', 'out_key': 'inpainted', 'refine': True, 'refiner': {'gpu_ids': '0', 'modulo': 8, 'n_iters': 15, 'lr': 0.002, 'min_side': 32, 'max_scales': 3, 'px_budget': 1800000}}
 
@@ -105,8 +105,14 @@ def lama_holefill(gen_image_np, worst_mask_np):
     model.freeze()
     # if not predict_config.get('refine', False):
     model.to(device)
-        
-
+    return model,predict_config
+def lama_holefill(gen_image_np, worst_mask_np):
+    global lama_model
+    global predict_config
+    if 'lama_model' not in globals():
+      lama_model,predict_config = get_lama_model()
+    model = lama_model
+    device = 'cuda'
     #==================================================
     #from torch.utils.data._utils.collate import default_collate
     #dataset = make_default_val_dataset(predict_config["indir"], **predict_config["dataset"])
