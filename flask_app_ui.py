@@ -1,5 +1,6 @@
 import builtins
 import ipdb
+import multiprocessing
 
 builtins.ipdb = ipdb
 import importlib
@@ -19,6 +20,7 @@ import numpy as np
 
 builtins.np = np
 from diffusers import StableDiffusionInpaintPipeline
+from diffusers import DPMSolverMultistepScheduler
 import torch
 import matplotlib.pyplot as plt
 import numpy
@@ -33,6 +35,7 @@ import dutils
 import copy
 import glob
 import colorful
+import time
 
 import debug
 from utils import save_results
@@ -53,6 +56,8 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg','png','JPG','JPEG','PNG'}
 
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
+
+max_threads = multiprocessing.cpu_count() * 2  # set max threads to double the number of available CPU cores
 
 
 cloudinary.config(
@@ -150,7 +155,7 @@ def prepare_image(impath=None, im_np=None):
 
 def place_in_large_image(orig_img_np, orig_mask_np):
     # target_height,target_width = 256,256
-    max_height, max_width = 312, 312
+    max_height, max_width = 512, 512   ## making it 512, 512 shoud ensure image is not downsized or offset in any way 
     current_height, current_width = orig_img_np.shape[:2]
     if current_height > current_width:
         target_height = max_height
@@ -198,6 +203,7 @@ def place_in_large_image(orig_img_np, orig_mask_np):
     # x_offset=y_offset=128
     y_offset = (512 - target_height) // 2
     x_offset = (512 - target_width) // 2
+    print("Offsets: ", x_offset, y_offset)
     large_img_np[y_offset:y_offset + small_out_np.shape[0], x_offset:x_offset + small_out_np.shape[1]] = small_out_np
 
     large_mask_np = np.full((512, 512, 3), 0, dtype=np.float32)
@@ -407,6 +413,8 @@ def run(impath=None,
     inverted_large_mask_np = 1 - large_mask_np
     GOOD = False
     print("HERE IN RUN FUNCTION") 
+    pipe = init_sd(device="cuda")
+    pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config) ## 12 may , diggy- changing the scheduler from defualt PNDM (50 inference steps)
     while not GOOD:
 
         print("in GOOD section")
@@ -414,18 +422,18 @@ def run(impath=None,
         # new_image = pipe(prompt=prompt, image=image, mask_image=inverted_mask, negative_prompt=neg_prompt, num_inference_steps=50,
         # guidance_scale=8).images[0]
 
-        pipe = init_sd(device="cuda")
         inverted_large_mask_pil = Image.fromarray((inverted_large_mask_np * 255.).astype(np.uint8)).convert('RGB')
         large_image_pil = Image.fromarray((large_image_np * 255.).astype(np.uint8)).convert('RGB')
         # import ipdb; ipdb.set_trace()
-        num_inference_steps = 50
+        num_inference_steps = 25
         if os.environ.get('DBG_FAST_SD', False):
             num_inference_steps = int(os.environ['DBG_FAST_SD'])
-        ngen = 5
+        ngen = 2
         G = []
+        import random
         for i in range(ngen):
             Gi = torch.Generator(device="cuda")
-            Gi.manual_seed(i)
+            Gi.manual_seed(random.randint(0, 1000))   ## diggy 13 may : randomization instead of setting 'i' seed 
             G.append(Gi)
         import torchvision
         large_image_tensor = torchvision.transforms.ToTensor()(large_image_pil).repeat(ngen,1,1,1)
@@ -433,14 +441,18 @@ def run(impath=None,
         inverted_large_mask_tensor = inverted_large_mask_tensor[:,:1]
         neg_prompts = [neg_prompt for _ in range(ngen)]
         prompts = [prompt for _ in range(ngen)]
+        start_time = time.time()
         new_image_obj = pipe(prompt=prompts, 
                             image=large_image_tensor, 
                               mask_image=inverted_large_mask_tensor,
                              negative_prompt=neg_prompts, 
                              num_inference_steps=num_inference_steps,
                              guidance_scale=8,generator=G)
+        print("=======> step: SD generation--- %s seconds ---" % (time.time() - start_time))
+
         #import ipdb;ipdb.set_trace()
         for gen_image_pil in new_image_obj.images:
+            start_time = time.time()
             #gen_image_pil = new_image_obj.images[0]
             gen_image_np = np.array(gen_image_pil) / 255.
             #skimage.io.imsave('gen_image_np.png', gen_image_np)
@@ -477,8 +489,13 @@ def run(impath=None,
                 large_mask_np[:, :, -1]).sum()
             # area_discrepancy2 = worst_mask_np[:,:].sum()/large_mask_np[:,:,-1].sum()
             print(colorful.red("remove images that have large holes"))
+            print(np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum())
+            print(np.abs(large_mask_np[:, :, -1]).sum())
             print(area_discrepancy)
-            if area_discrepancy < 0.2:
+            print("=======> step: area discrepancy calculation--- %s seconds ---" % (time.time() - start_time))
+
+
+            if area_discrepancy < 0.6: # this value was 0.2 in aniket's version, doing it to kill the while loop
                 GOOD = True
                 break
             else:
@@ -486,8 +503,9 @@ def run(impath=None,
             # import ipdb; ipdb.set_trace()        
 
             # mask_np = (gen_mask_np>0.5).astype(np.float32)
-
+    start_time = time.time()
     repasted_np, holefilled = holefill_and_repaste(large_image_np, gen_image_np, gen_mask_np, large_mask_np_float)
+    print("=======> step: repasting & holefilling--- %s seconds ---" % (time.time() - start_time))
 
     holefilled_np = tensor_to_numpy(holefilled[:, :3].permute(0, 2, 3, 1)[0])
     extras = {'holefilled': holefilled_np, 'initial_repasted': repasted_np}
@@ -691,7 +709,7 @@ def get_file_extension(filename):
 
 
 if __name__ == '__main__':
-   # app.run(debug=True)
-    serve(app, host='0.0.0.0', port=8080)
+   app.run()
+#    serve(app, threads = max_threads, host='0.0.0.0', port=8080)
 
 
