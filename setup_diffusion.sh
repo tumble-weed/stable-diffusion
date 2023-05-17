@@ -3,6 +3,9 @@ pip install jupyter
 pip install colorful
 pip install cloudinary
 pip install waitress
+pip install gunicorn
+pip install gunicorn gevent
+
 # pip install diffusers
 git clone https://github.com/tumble-weed/diffusers.git
 pip install -e diffusers
