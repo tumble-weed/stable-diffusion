@@ -69,6 +69,7 @@ def init_sd(device="cuda"):
         pipe = pipe.to(device)
         #pipe.enable_attention_slicing()
         #pipe.enable_model_cpu_offload()
+        pipe.enable_xformers_memory_efficient_attention()
     return pipe
 
 
