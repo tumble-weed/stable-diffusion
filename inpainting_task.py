@@ -577,77 +577,16 @@ def upload_cloudinary(filename, width, height):
     return img_url
 
 
-@app.route("/removeBg", methods=['GET', 'POST'])
-def process_image2():
+
+
+def process_image(prompt, filename, filePath, jobId):
+    print("HERE IN PROCESS IMAGE FUNCTION " ) 
+    
     output_image_name = ''
-    filename = ''
     img_url = ''
-    prompt = request.form['text']
-    # ADD TRY CATCH AND SEND FAILURE REASON
-    # ADD LOGGING FOR DIFFERENT TYPES OF FAILURES
-    if len(prompt) == 0:
-        print("Prompt is empty")
-
-    #    return jsonify({'msg': 'success',
-    #                    'input_url': 'https://res.cloudinary.com/db5g1vegd/image/upload/c_fill,h_512,w_512/j3b5ywmibx30qdntttug.png',
-    #                    'output_url_1024': 'https://res.cloudinary.com/db5g1vegd/image/upload/c_fill,h_512,w_512/j3b5ywmibx30qdntttug.png',
-    #                    'output_url_512': 'https://res.cloudinary.com/db5g1vegd/image/upload/c_fill,h_512,w_512/j3b5ywmibx30qdntttug.png',
-    #                    })
-
     try:
-        if request.method == 'POST':
-            if 'file' not in request.files:
-                print('No file attached in request')
-                return redirect(request.url)
-        file = request.files['file']
-        if file.filename == '':
-            print('No file selected')
-            return redirect(request.url)
-        if file and allowed_file(file.filename):
-            print('IN UPLOADED FILES')
-            filename = file.filename  # input image filename
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
 
-            img_url = upload_cloudinary(filename, 1024, 1024)
-            file_extension = get_file_extension(filename)
-            impath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            gen_image_np, repasted_np, extras, inp_image_np = run(impath=impath, prompt=prompt)
-
-            output_image_name = filename.replace('.' + file_extension, '') + "-generated.png"
-            output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_image_name)
-
-            print("FILENAME--- " + os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            print("OUTPUT FILENAME--  " + os.path.join(app.config['UPLOAD_FOLDER'], output_image_name))
-
-            Image.fromarray((repasted_np * 255).astype(np.uint8)).save(output_path)
-
-            outPut_image_url_1024 = upload_cloudinary(output_image_name, 1024, 1024)
-            outPut_image_url_512 = upload_cloudinary(output_image_name, 512, 512)
-
-            os.remove(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-            os.remove(os.path.join(app.config['UPLOAD_FOLDER'], output_image_name))
-
-        return jsonify({'msg': 'success',
-                        'input_url': img_url,
-                        'output_url_1024': outPut_image_url_1024,
-                        'output_url_512': outPut_image_url_512,
-                        })
-    except Exception as e:
-        print("An error occurred:", str(e))
-        return jsonify({'msg': 'failure',
-                        'reason': str(e)})
-
-
-def process_image():
-    output_image_name = ''
-    filename = ''
-    img_url = ''
-    jobId = ''
-    try:
-        prompt = int(sys.argv[1])
-        filePath = sys.argv[2]
-        filename = os.path.basename(filePath)
-        jobId = int(sys.argv[3])
+        print("HERE IN TASKS QUEUE " + prompt + " " + filename + " " + jobId ) 
     # ADD TRY CATCH AND SEND FAILURE REASON
     # ADD LOGGING FOR DIFFERENT TYPES OF FAILURES 
         if len(prompt) == 0:
@@ -677,14 +616,30 @@ def process_image():
 
             print("OUTPUT IMAGE 1024" + outPut_image_url_1024)
 
-            os.remove(os.path.join(app.config['UPLOAD_FOLDER'],filename))
-            os.remove(os.path.join(app.config['UPLOAD_FOLDER'],output_image_name))
-
-        return jsonify({'msg': 'success',
-                        'input_url': img_url,
-                        'output_url_1024': outPut_image_url_1024,
-                        'output_url_512': outPut_image_url_512})
+    #        os.remove(os.path.join(app.config['UPLOAD_FOLDER'],filename))
+     #       os.remove(os.path.join(app.config['UPLOAD_FOLDER'],output_image_name))
+            print("TASKS WAS SUCCESSFUL WITH URL " + outPut_image_url_512 ) 
+    
     except Exception as e:
-        print("An error occurred:", str(e))
-        return jsonify({'msg': 'failure',
-                         'reason': str(e)})
+        print("An error occurred:  TASK WAS UNSUCCESSFUL", str(e))
+    finally: 
+        print("REACHED FINALLY BLOCK" ) 
+    return 
+
+if __name__ == '__main__':
+    # Check if two command-line arguments are provided
+    prompt = sys.argv[1]
+    filePath = sys.argv[2]
+    filename = os.path.basename(filePath)
+    jobId = sys.argv[3]
+
+    print("HERE IN MAIN FUNCTION  " + prompt + " " + filename + " " + jobId + " " + filePath ) 
+    process_image(prompt, filename, filePath, jobId ) 
+
+    sys.exit(1)
+
+
+    result = add_numbers(num1, num2)
+
+    # Print the result
+    print(result)

@@ -773,7 +773,7 @@ def get_file_extension(filename):
 
 
 @app.route("/taskQueueSample",methods=['GET', 'POST'])
-def process_image():
+def taskQueueProcessor():
     output_image_name = ''
     filename = ''
     img_url = ''
@@ -793,14 +793,19 @@ def process_image():
             print('No file selected')
             return redirect(request.url)
         if file and allowed_file(file.filename):
-            print('IN UPLOADED FILES')
+            print("ADDING TASKS TO QUEUE ")
             filename = file.filename #input image filename
             file.save(os.path.join(app.config['UPLOAD_FOLDER'],filename))
 
             inputImagePath = os.path.join(app.config['UPLOAD_FOLDER'],filename)
             jobId  = generate_job_id()
-            subprocess.Popen(["python", "inpainting_task.py", str(prompt), inputImagePath, jobId])
 
+            process = subprocess.Popen(["python", "inpainting_task.py", str(prompt), inputImagePath, jobId],
+stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+            for line in iter(process.stdout.readline, b''):
+                print(">>> " + line.rstrip())
+            process.communicate()
+            print("TASK ADDED TO QUEUE" ) 
         return jsonify({'msg': 'success',
                         jobId: jobId})
     except Exception as e:
