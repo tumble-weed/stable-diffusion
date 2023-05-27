@@ -1,4 +1,5 @@
 import builtins
+import ipdb
 import multiprocessing
 builtins.ipdb = ipdb
 import importlib
@@ -15,6 +16,7 @@ builtins.np = np
 from diffusers import StableDiffusionInpaintPipeline
 from diffusers import DPMSolverMultistepScheduler
 import torch
+import matplotlib.pyplot as plt
 import numpy
 import numpy as np
 from PIL import Image, ImageDraw
@@ -39,21 +41,25 @@ from cloudinary.uploader import upload
 import cloudinary.api
 from cloudinary.utils import cloudinary_url
 
-
 app = Flask(__name__)
-UPLOAD_FOLDER = os.path.dirname(os.path.abspath(__file__)) 
+UPLOAD_FOLDER = os.path.dirname(os.path.abspath(__file__))
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-ALLOWED_EXTENSIONS = {'jpg', 'jpeg','png','JPG','JPEG','PNG'}
+save_debug = False  # if True will save intermediate images to gdrive for debugging
+
+ALLOWED_EXTENSIONS = {'jpg', 'jpeg', 'png', 'JPG', 'JPEG', 'PNG'}
+
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
+
 max_threads = multiprocessing.cpu_count() * 2  # set max threads to double the number of available CPU cores
 
 cloudinary.config(
-    cloud_name = "db5g1vegd",
-    api_key = "381722484831413",
-    api_secret = "iDkNvcjW8RXBSJNIuoWf5YMiKv0",
-    secure = True
+    cloud_name="db5g1vegd",
+    api_key="381722484831413",
+    api_secret="iDkNvcjW8RXBSJNIuoWf5YMiKv0",
+    secure=True
 )
 
+# from bg_removal_clip import bgremove_clip
 
 tensor_to_numpy = lambda t: t.detach().cpu().numpy()
 HARMONIZE = True
@@ -61,25 +67,33 @@ USE_CLIPSEG = False
 if os.environ.get('USE_CLIPSEG', None) == "1":
     USE_CLIPSEG = True
 debug.DEBUG_HARMONIZATION = True
+global rembg_session
+rembg_session = {'session': None}
+
 ####################################################################
 # flags for holefilling
 os.environ['DBG_IGNORE_RESIZE'] = '1'
 os.environ['PNN_XRANGE_ERROR'] = '0'
 os.environ['DBG_NO_UPSIZE'] = '0'
 
+global pipe
 
 def init_sd(device="cuda"):
-    pipe = StableDiffusionInpaintPipeline.from_pretrained(
-        "stabilityai/stable-diffusion-2-inpainting",  # 'runwayml/stable-diffusion-inpainting'
-        revision="fp16",
-        torch_dtype=torch.float16,
-    )
-    pipe = pipe.to(device)
+    if 'pipe' not in globals():
+        global pipe
+        pipe = StableDiffusionInpaintPipeline.from_pretrained(
+            "stabilityai/stable-diffusion-2-inpainting",  # 'runwayml/stable-diffusion-inpainting'
+            revision="fp16",
+            torch_dtype=torch.float16,
+        )
+        pipe = pipe.to(device)
     return pipe
+
 
 ####################################################################
 
 def prepare_image(impath=None, im_np=None):
+    global rembg_session
     # import ipdb; ipdb.set_trace()
     if im_np is None:
         assert impath is not None
@@ -97,15 +111,12 @@ def prepare_image(impath=None, im_np=None):
     if orig_img_np.dtype == np.uint8:
         orig_img_np = orig_img_np.astype(np.float32)
 
+    # import ipdb; ipdb.set_trace()
 
-    if False and USE_CLIPSEG:
-        mask_np = bgremove_clip(orig_img_np, ["flask"], max_val=255)
-        # (mask_np == 255).astype(np.uint8).sum()
-        utils.cipdb('DBG_CLIPSEG')
-    else:
-        mask_img_pil = remove(orig_img_pil)  # remove background
-        mask_np = np.array(mask_img_pil).astype(np.float32)
-        mask_np = mask_np[..., -1]
+    mask_img_pil = remove(orig_img_pil, session=rembg_session['session'],
+                          rembg_session=rembg_session)  # remove background
+    mask_np = np.array(mask_img_pil).astype(np.float32)
+    mask_np = mask_np[..., -1]
 
     mask_np = np.stack([mask_np, mask_np, mask_np], axis=-1)
     if mask_np.max() > 1:
@@ -113,11 +124,12 @@ def prepare_image(impath=None, im_np=None):
     mask_np = (mask_np > 0.5).astype(np.float32)
     return orig_img_np, mask_np
 
+
 ####################################################################
 
 def place_in_large_image(orig_img_np, orig_mask_np):
     # target_height,target_width = 256,256
-    max_height, max_width = 512, 512   ## making it 512, 512 shoud ensure image is not downsized or offset in any way 
+    max_height, max_width = 512, 512  ## making it 512, 512 shoud ensure image is not downsized or offset in any way
     current_height, current_width = orig_img_np.shape[:2]
     if current_height > current_width:
         target_height = max_height
@@ -128,6 +140,7 @@ def place_in_large_image(orig_img_np, orig_mask_np):
         target_height = (current_height / current_width) * target_width
         target_height = int(target_height)
         # import pdb; pdb.set_trace()
+
     # .....................................
     # small_res_np = np.array(orig_img_pil.resize((256,256)))
     small_res_np = skimage.transform.resize(orig_img_np, (target_height, target_width))
@@ -150,11 +163,14 @@ def place_in_large_image(orig_img_np, orig_mask_np):
 
     large_mask_np = np.full((512, 512, 3), 0, dtype=np.float32)
     large_mask_np[y_offset:y_offset + small_out_np.shape[0], x_offset:x_offset + small_out_np.shape[1]] = small_mask_np
-
+    # ==============================================================
+    # pdb.set_trace()
+    # import ipdb; ipdb.set_trace()
     return large_img_np, large_mask_np
 
 
 def create_mask_(img_np):
+    global rembg_session
     # import ipdb; ipdb.set_trace()
     assert img_np.max() <= 1
     if USE_CLIPSEG:
@@ -163,7 +179,7 @@ def create_mask_(img_np):
         utils.cipdb('DBG_CLIPSEG')
     else:
         img_pil = Image.fromarray((img_np * 255.).astype(np.uint8)).convert('L')
-        mask_pil = remove(img_pil)  # remove background
+        mask_pil = remove(img_pil, session=rembg_session['session'], rembg_session=rembg_session)  # remove background
         mask_np = np.array(mask_pil)
         assert mask_np.ndim == 3
         assert mask_np.shape[-1] == 4
@@ -201,15 +217,32 @@ def create_mask(img_np):
     return mask_np
 
 
-def repaste_after_downshift(holefilled_np, large_mask_np_float, large_image_np, gen_mask_np, large_mask_np):
+def find_lowest_point(mask_np):
+    # shift the object in large_image downwards
+    Y, X = np.meshgrid(np.arange(mask_np.shape[0]), np.arange(mask_np.shape[1]), indexing='ij')
+    # YX = np.stack([Y, X], axis=-1)
+    lowest_y = (mask_np.mean(axis=-1) * Y).argmax(axis=0).max()
+    return lowest_y
+
+
+def repaste_after_downshift(holefilled_np, large_mask_np_float, large_image_np, gen_mask_np, large_mask_np,
+                            gen_mask_np_float):
     # shift the object in large_image downwards
     Y, X = np.meshgrid(np.arange(gen_mask_np.shape[0]), np.arange(gen_mask_np.shape[1]), indexing='ij')
     YX = np.stack([Y, X], axis=-1)
     lowest_gen = (gen_mask_np.mean(axis=-1) * Y).argmax(axis=0).max()
     lowest_large = (large_mask_np.mean(axis=-1) * Y).argmax(axis=0).max()
+    print('Binary map (old) : lowest gen => ', lowest_gen, ' lowest input => ', lowest_large)
+    lowest_gen = (gen_mask_np_float.mean(axis=-1) * Y).argmax(axis=0).max()
+    lowest_large = (large_mask_np_float.mean(axis=-1) * Y).argmax(axis=0).max()
+    print('Float (new) : lowest gen => ', lowest_gen, ' lowest input => ', lowest_large)
     to_move = 0
     if lowest_gen > lowest_large:
         to_move = lowest_gen - lowest_large
+        print("To move is positive and ---> ", to_move)
+        if to_move > 60:  ## translates to 0.1171875 height discrepancy value
+            import pdb;
+            pdb.set_trace()
         # if to_move > 30:
         #     os.environ['shifted_down'] = '1'
         new_large_image_np = np.zeros(large_image_np.shape)
@@ -218,6 +251,7 @@ def repaste_after_downshift(holefilled_np, large_mask_np_float, large_image_np, 
         new_large_mask_np_float = np.zeros(large_mask_np.shape)
         new_large_mask_np_float[to_move:, ...] = large_mask_np_float[:-to_move]
     else:
+        print("To move is negative ", lowest_gen - lowest_large)
         new_large_mask_np_float = large_mask_np_float
         new_large_image_np = large_image_np
     repasted = holefilled_np * (1 - new_large_mask_np_float) + (new_large_image_np * new_large_mask_np_float)
@@ -239,9 +273,11 @@ def repaste_after_downshift(holefilled_np, large_mask_np_float, large_image_np, 
 
 def holefill_and_repaste(large_image_np, gen_image_np, gen_mask_np, large_mask_np):
     large_mask_np_float = large_mask_np
+    gen_mask_np_float = gen_mask_np
     # NOTE: use threshold of 0 here to make a large mask to fill
-    large_mask_np = (large_mask_np_float > 0.).astype(np.float32)
-    gen_mask_np = (gen_mask_np > 0.).astype(np.float32)
+    large_mask_np = (large_mask_np_float > 0.).astype(
+        np.float32)  ## NOTE: this is the reason we are shifting objects excessively
+    gen_mask_np = (gen_mask_np_float > 0.).astype(np.float32)
 
     worst_mask_np = np.maximum(gen_mask_np[..., -1].astype(np.float32),
                                large_mask_np[..., -1].astype(np.float32))
@@ -306,8 +342,9 @@ def holefill_and_repaste(large_image_np, gen_image_np, gen_mask_np, large_mask_n
         gpnn_inpainting = gpnn(config)
         holefilled, holefilling_results = gpnn_inpainting.run(to_save=False)
     else:
-        from hole_filling import lama_holefill
-        holefilled = lama_holefill(gen_image_np, worst_mask_np)
+        with torch.inference_mode(mode=False):
+            from hole_filling import lama_holefill
+            holefilled = lama_holefill(gen_image_np, worst_mask_np)
 
     # repasted = copy.deepcopy(tensor_to_numpy(holefilled[:,:3].permute(0,2,3,1)[0]))
     holefilled_np = copy.deepcopy(tensor_to_numpy(holefilled[:, :3].permute(0, 2, 3, 1)[0]))
@@ -316,7 +353,7 @@ def holefill_and_repaste(large_image_np, gen_image_np, gen_mask_np, large_mask_n
         repasted = holefilled_np * (1 - large_mask_np_float) + (large_image_np * large_mask_np_float)
     else:
         repasted = repaste_after_downshift(holefilled_np, large_mask_np_float, large_image_np, gen_mask_np,
-                                           large_mask_np)
+                                           large_mask_np, gen_mask_np_float)
 
     # import ipdb; ipdb.set_trace()
 
@@ -338,20 +375,39 @@ def vae_encode_decode(repasted_np, pipe):
     repasted2_np = tensor_to_numpy(repasted2.permute(0, 2, 3, 1))[0]
     return repasted2_np
 
+
 def run(impath=None,
         im_np=None,
         prompt="hyperrealistic photo of the object lying on a table in front of nigara falls. HD, 4K, 8K, render, lens flare, product photo, generate new prospective",
         neg_prompt='ugly, black and white, blurr, oversaturated, 3d, render, cartoon, fusioned, deformed, mutant, bad anatomy, extra hands and fingers'
 
         ):
+    start_run = time.time()
     print(colorful.cyan('using parallel'))
-    orig_img_np, orig_mask_np = prepare_image(impath=impath, im_np=im_np)
+    with torch.inference_mode():
+        orig_img_np, orig_mask_np = prepare_image(impath=impath, im_np=im_np)
+        if save_debug == True:
+            if orig_img_np.dtype != np.uint8:
+                im_tmp = (orig_img_np * 255).astype(np.uint8)
+                im_ = Image.fromarray(im_tmp, "RGB")
+                im_.save('results/debug/input_img.jpeg')
 
-    large_image_np, large_mask_np = place_in_large_image(orig_img_np, orig_mask_np)
-    inverted_large_mask_np = 1 - large_mask_np
-    print("HERE IN RUN FUNCTION")
-    pipe = init_sd(device="cuda")
-    pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config) ## 12 may , diggy- changing the scheduler from defualt PNDM (50 inference steps)
+        # import ipdb; ipdb.set_trace()
+        # large_image_np, large_mask_np = place_in_large_image(orig_img_np, orig_mask_np)
+        large_image_np, large_mask_np = orig_img_np, orig_mask_np
+        if save_debug == True:
+            if large_image_np.dtype != np.uint8:
+                im_tmp = (large_image_np * 255).astype(np.uint8)
+                im_ = Image.fromarray(im_tmp, "RGB")
+                im_.save('results/debug/large_img.jpeg')
+
+        inverted_large_mask_np = 1 - large_mask_np
+        print("HERE IN RUN FUNCTION , & large img is orig_img now")
+        pipe = init_sd(device="cuda")
+        pipe.scheduler = DPMSolverMultistepScheduler.from_config(
+            pipe.scheduler.config)  ## 12 may , diggy- changing the scheduler from defualt PNDM (50 inference steps)
+        num_inference_steps = 25
+
 
     print("in GOOD section")
     ## Testing the Stable Diffusion:
@@ -361,37 +417,42 @@ def run(impath=None,
     inverted_large_mask_pil = Image.fromarray((inverted_large_mask_np * 255.).astype(np.uint8)).convert('RGB')
     large_image_pil = Image.fromarray((large_image_np * 255.).astype(np.uint8)).convert('RGB')
     # import ipdb; ipdb.set_trace()
-    num_inference_steps = 25
     if os.environ.get('DBG_FAST_SD', False):
         num_inference_steps = int(os.environ['DBG_FAST_SD'])
     ngen = 2
     G = []
+    print("ngen is " + str(ngen))
     import random
     for i in range(ngen):
         Gi = torch.Generator(device="cuda")
-        Gi.manual_seed(random.randint(0, 1000))   ## diggy 13 may : randomization instead of setting 'i' seed
+        Gi.manual_seed(random.randint(0, 100000))  ## diggy 13 may : randomization instead of setting 'i' seed
         G.append(Gi)
     import torchvision
-    large_image_tensor = torchvision.transforms.ToTensor()(large_image_pil).repeat(ngen,1,1,1)
-    inverted_large_mask_tensor = torchvision.transforms.ToTensor()(inverted_large_mask_pil).repeat(ngen,1,1,1)
-    inverted_large_mask_tensor = inverted_large_mask_tensor[:,:1]
+    large_image_tensor = torchvision.transforms.ToTensor()(large_image_pil).repeat(ngen, 1, 1, 1)
+    inverted_large_mask_tensor = torchvision.transforms.ToTensor()(inverted_large_mask_pil).repeat(ngen, 1, 1,
+                                                                                                   1)
+    inverted_large_mask_tensor = inverted_large_mask_tensor[:, :1]
     neg_prompts = [neg_prompt for _ in range(ngen)]
     prompts = [prompt for _ in range(ngen)]
     start_time = time.time()
     new_image_obj = pipe(prompt=prompts,
-                        image=large_image_tensor,
-                          mask_image=inverted_large_mask_tensor,
+                         # image=large_image_tensor,
+                         # mask_image=inverted_large_mask_tensor,
+                         image=[large_image_pil for _ in range(ngen)],
+                         mask_image=[inverted_large_mask_pil for _ in range(ngen)],
                          negative_prompt=neg_prompts,
                          num_inference_steps=num_inference_steps,
-                         guidance_scale=8,generator=G)
+                         guidance_scale=8,
+                         generator=G
+                         )
     print("=======> step: SD generation--- %s seconds ---" % (time.time() - start_time))
 
-    #import ipdb;ipdb.set_trace()
+    # import ipdb;ipdb.set_trace()
     for gen_image_pil in new_image_obj.images:
         start_time = time.time()
-        #gen_image_pil = new_image_obj.images[0]
+        # gen_image_pil = new_image_obj.images[0]
         gen_image_np = np.array(gen_image_pil) / 255.
-        #skimage.io.imsave('gen_image_np.png', gen_image_np)
+        # skimage.io.imsave('gen_image_np.png', gen_image_np)
         # orig_img_pil = gen_image_pil
         if False and 'mask using polygon':
             ####################################################################
@@ -421,38 +482,60 @@ def run(impath=None,
         large_mask_np_float = large_mask_np
         large_mask_np = (large_mask_np > 0.5).astype(np.float32)
 
-        area_discrepancy = np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum() / np.abs(
-            large_mask_np[:, :, -1]).sum()
+        # area_discrepancy = np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum() / np.abs(
+        #    large_mask_np[:, :, -1]).sum()
         # area_discrepancy2 = worst_mask_np[:,:].sum()/large_mask_np[:,:,-1].sum()
+        lowest_gen = find_lowest_point(gen_mask_np)
+        lowest_inp = find_lowest_point(large_mask_np)
+        height_discrepancy = np.abs(lowest_gen - lowest_inp) / gen_mask_np.shape[0]
+        print("height discrepancy ==> ", height_discrepancy)
         print(colorful.red("remove images that have large holes"))
-        print(np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum())
-        print(np.abs(large_mask_np[:, :, -1]).sum())
-        print(area_discrepancy)
+        # print(np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum())
+        # print(np.abs(large_mask_np[:, :, -1]).sum())
+        # print("area discrepancy ==> " , area_discrepancy)
         print("=======> step: area discrepancy calculation--- %s seconds ---" % (time.time() - start_time))
 
-
-        if area_discrepancy < 0.6: # this value was 0.2 in aniket's version, doing it to kill the while loop
+        # if area_discrepancy < 0.6: # this value was 0.2 in aniket's version, doing it to kill the while loop
+        #    GOOD = True
+        #    break
+        if height_discrepancy < 0.1171875:  # corresponds to 60 / 512 pixels
             GOOD = True
             break
         else:
-            print(colorful.yellow("too large a difference in sizes of generated object and original object, redoing"))
+            print(colorful.yellow(
+                "too large a difference in sizes of generated object and original object, redoing"))
         # import ipdb; ipdb.set_trace()
 
-            # mask_np = (gen_mask_np>0.5).astype(np.float32)
-    start_time = time.time()
-    repasted_np, holefilled = holefill_and_repaste(large_image_np, gen_image_np, gen_mask_np, large_mask_np_float)
-    print("=======> step: repasting & holefilling--- %s seconds ---" % (time.time() - start_time))
+                # mask_np = (gen_mask_np>0.5).astype(np.float32)
+        if save_debug == True:
+            if gen_image_np.dtype != np.uint8:
+                im_tmp = (gen_image_np * 255).astype(np.uint8)
+                im_ = Image.fromarray(im_tmp, "RGB")
+                im_.save('results/debug/gen_img1.jpeg')
+        start_time = time.time()
+        repasted_np, holefilled = holefill_and_repaste(large_image_np, gen_image_np, gen_mask_np, large_mask_np_float)
+        print("=======> step: repasting & holefilling--- %s seconds ---" % (time.time() - start_time))
 
-    holefilled_np = tensor_to_numpy(holefilled[:, :3].permute(0, 2, 3, 1)[0])
-    extras = {'holefilled': holefilled_np, 'initial_repasted': repasted_np}
-    # ============================================================
-    # vae fine tuning
-    # prev_pil = Image.fromarray((repasted_np*255.).astype(np.uint8)).convert('L')
-    # prev_mask_pil = remove(prev_pil)
-    # prev_mask_np = np.array(prev_mask_pil).astype(np.float32)        
-    repasted2_np = repasted_np
+        holefilled_np = tensor_to_numpy(holefilled[:, :3].permute(0, 2, 3, 1)[0])
+        extras = {'holefilled': holefilled_np, 'initial_repasted': repasted_np}
+        # import ipdb; ipdb.set_trace()
+        # ============================================================
+        # vae fine tuning
+        # prev_pil = Image.fromarray((repasted_np*255.).astype(np.uint8)).convert('L')
+        # prev_mask_pil = remove(prev_pil)
+        # prev_mask_np = np.array(prev_mask_pil).astype(np.float32)
+        repasted2_np = repasted_np
+        if save_debug == True:
+            if repasted2_np.dtype != np.uint8:
+                im_tmp = (repasted2_np * 255).astype(np.uint8)
+                im_ = Image.fromarray(im_tmp, "RGB")
+                im_.save('results/debug/repasted.jpeg')
+                os.system('rclone sync -Pv results/debug aniket-gdrive:stable-diffusion-experiments/debugging/platform')
 
-    return gen_image_np, repasted2_np, extras, large_image_np
+        # return
+        print("=======> RUN function time --- %s seconds ---" % (time.time() - start_run))
+        return gen_image_np, repasted2_np, extras, large_image_np
+
 
 def run_on_folder(folder, results_root='results'):
     if not os.path.isdir(results_root):
@@ -473,15 +556,17 @@ def run_on_folder(folder, results_root='results'):
             import sys
             sys.exit()
 
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
 
 def get_file_extension(filename):
     return filename.rsplit('.', 1)[1]
 
 
 def upload_cloudinary(filename, width, height):
-    response = upload(filename, tags='image upload',quality="auto:best")
+    response = upload(filename, tags='image upload', quality="auto:best")
     img_url, options = cloudinary_url(
         response['public_id'],
         format=response['format'],
@@ -490,6 +575,68 @@ def upload_cloudinary(filename, width, height):
         crop="fill"
     )
     return img_url
+
+
+@app.route("/removeBg", methods=['GET', 'POST'])
+def process_image2():
+    output_image_name = ''
+    filename = ''
+    img_url = ''
+    prompt = request.form['text']
+    # ADD TRY CATCH AND SEND FAILURE REASON
+    # ADD LOGGING FOR DIFFERENT TYPES OF FAILURES
+    if len(prompt) == 0:
+        print("Prompt is empty")
+
+    #    return jsonify({'msg': 'success',
+    #                    'input_url': 'https://res.cloudinary.com/db5g1vegd/image/upload/c_fill,h_512,w_512/j3b5ywmibx30qdntttug.png',
+    #                    'output_url_1024': 'https://res.cloudinary.com/db5g1vegd/image/upload/c_fill,h_512,w_512/j3b5ywmibx30qdntttug.png',
+    #                    'output_url_512': 'https://res.cloudinary.com/db5g1vegd/image/upload/c_fill,h_512,w_512/j3b5ywmibx30qdntttug.png',
+    #                    })
+
+    try:
+        if request.method == 'POST':
+            if 'file' not in request.files:
+                print('No file attached in request')
+                return redirect(request.url)
+        file = request.files['file']
+        if file.filename == '':
+            print('No file selected')
+            return redirect(request.url)
+        if file and allowed_file(file.filename):
+            print('IN UPLOADED FILES')
+            filename = file.filename  # input image filename
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+
+            img_url = upload_cloudinary(filename, 1024, 1024)
+            file_extension = get_file_extension(filename)
+            impath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            gen_image_np, repasted_np, extras, inp_image_np = run(impath=impath, prompt=prompt)
+
+            output_image_name = filename.replace('.' + file_extension, '') + "-generated.png"
+            output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_image_name)
+
+            print("FILENAME--- " + os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            print("OUTPUT FILENAME--  " + os.path.join(app.config['UPLOAD_FOLDER'], output_image_name))
+
+            Image.fromarray((repasted_np * 255).astype(np.uint8)).save(output_path)
+
+            outPut_image_url_1024 = upload_cloudinary(output_image_name, 1024, 1024)
+            outPut_image_url_512 = upload_cloudinary(output_image_name, 512, 512)
+
+            os.remove(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+            os.remove(os.path.join(app.config['UPLOAD_FOLDER'], output_image_name))
+
+        return jsonify({'msg': 'success',
+                        'input_url': img_url,
+                        'output_url_1024': outPut_image_url_1024,
+                        'output_url_512': outPut_image_url_512,
+                        })
+    except Exception as e:
+        print("An error occurred:", str(e))
+        return jsonify({'msg': 'failure',
+                        'reason': str(e)})
+
 
 def process_image():
     output_image_name = ''
@@ -500,7 +647,6 @@ def process_image():
         prompt = int(sys.argv[1])
         filePath = sys.argv[2]
         filename = os.path.basename(filePath)
-
         jobId = int(sys.argv[3])
     # ADD TRY CATCH AND SEND FAILURE REASON
     # ADD LOGGING FOR DIFFERENT TYPES OF FAILURES 
@@ -529,54 +675,16 @@ def process_image():
             outPut_image_url_1024 = upload_cloudinary(output_image_name, 1024, 1024)
             outPut_image_url_512 = upload_cloudinary(output_image_name, 512, 512 )
 
+            print("OUTPUT IMAGE 1024" + outPut_image_url_1024)
+
             os.remove(os.path.join(app.config['UPLOAD_FOLDER'],filename))
             os.remove(os.path.join(app.config['UPLOAD_FOLDER'],output_image_name))
 
         return jsonify({'msg': 'success',
-			'input_url': img_url,
-			'output_url_1024': outPut_image_url_1024,
-			'output_url_512': outPut_image_url_512,
-			})
+                        'input_url': img_url,
+                        'output_url_1024': outPut_image_url_1024,
+                        'output_url_512': outPut_image_url_512})
     except Exception as e:
         print("An error occurred:", str(e))
         return jsonify({'msg': 'failure',
                          'reason': str(e)})
-
-
-
-@app.route('/', methods=['GET','POST'])
-def upload_file():
-    upload_result = None
-    output_image_name = ''
-    removedbg_path = ''
-    img_brighten = ''
-    filename = ''
-    img_url = ''
-    prompt = request.form['text']
-    # check if the post request has the file part
-    if 'file' not in request.files:
-        return redirect(request.url)
-    file = request.files['file']
-    # if user does not select file, browser also
-    # submit an empty part without filename
-    if file.filename == '':
-        return redirect(request.url)
-    if file:
-        filename = file.filename
-        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-        impath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        gen_image_np, repasted_np, extras,inp_image_np = run(impath=impath, prompt=prompt)
-
-        file_extension = get_file_extension(filename)
-        output_image_name = filename.replace('.'+ file_extension, '') + "-generated.png"
-
-        output_path = os.path.join(app.config['UPLOAD_FOLDER'],output_image_name)
-        Image.fromarray((repasted_np * 255).astype(np.uint8)).save(output_path)
-
-        return redirect(url_for('uploaded_file', filename=output_image_name))
-
-
-
-def get_file_extension(filename):
-    return filename.rsplit('.', 1)[1]
-
