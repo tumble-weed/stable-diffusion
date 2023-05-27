@@ -1,28 +1,20 @@
 import builtins
-import ipdb
 import multiprocessing
-
 builtins.ipdb = ipdb
 import importlib
-
 builtins.importlib = importlib
 import sys
-
 sys.path.append('/home/ubuntu/stable-diffusion/clipseg/models')
 builtins.sys = sys
 import os
-
 builtins.os = os
 import torch
-
 builtins.torch = torch
 import numpy as np
-
 builtins.np = np
 from diffusers import StableDiffusionInpaintPipeline
 from diffusers import DPMSolverMultistepScheduler
 import torch
-import matplotlib.pyplot as plt
 import numpy
 import numpy as np
 from PIL import Image, ImageDraw
@@ -36,7 +28,6 @@ import copy
 import glob
 import colorful
 import time
-
 import debug
 from utils import save_results
 import utils
@@ -47,20 +38,14 @@ import cloudinary
 from cloudinary.uploader import upload
 import cloudinary.api
 from cloudinary.utils import cloudinary_url
-import uuid
-import subprocess
 
 
 app = Flask(__name__)
 UPLOAD_FOLDER = os.path.dirname(os.path.abspath(__file__)) 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
 ALLOWED_EXTENSIONS = {'jpg', 'jpeg','png','JPG','JPEG','PNG'}
-
 app.config['MAX_CONTENT_LENGTH'] = 8 * 1024 * 1024
-
 max_threads = multiprocessing.cpu_count() * 2  # set max threads to double the number of available CPU cores
-
 
 cloudinary.config(
     cloud_name = "db5g1vegd",
@@ -69,9 +54,6 @@ cloudinary.config(
     secure = True
 )
 
-
-
-# from bg_removal_clip import bgremove_clip
 
 tensor_to_numpy = lambda t: t.detach().cpu().numpy()
 HARMONIZE = True
@@ -95,7 +77,6 @@ def init_sd(device="cuda"):
     pipe = pipe.to(device)
     return pipe
 
-
 ####################################################################
 
 def prepare_image(impath=None, im_np=None):
@@ -115,43 +96,22 @@ def prepare_image(impath=None, im_np=None):
         orig_img_np = orig_img_np[..., :3]
     if orig_img_np.dtype == np.uint8:
         orig_img_np = orig_img_np.astype(np.float32)
-    if False and 'hardcode for bisleri':
-        coords = "362,884,377,947,419,975,464,986,514,983,547,976,597,962,612,956,637,884,637,833,636,776,638,717,637,678,629,660,632,423,636,405,643,353,640,306,628,263,616,230,589,179,557,143,550,116,561,110,549,97,563,91,553,35,433,38,426,44,426,96,433,102,421,112,433,116,433,140,409,168,389,194,374,228,355,272,355,289,354,336,354,406,358,426,360,648"
-        coords = coords.split(',')
-        poly_coord = []
-        for i in coords:
-            poly_coord.append(int(i))
 
-        polygon = poly_coord  # [(x1,y1),(x2,y2),...] or [x1,y1,x2,y2,...]
-        mask_img_pil = Image.new('L', (width, height), 0)
-        ImageDraw.Draw(mask_img_pil).polygon(polygon, outline=1, fill=1)
-        mask_np = numpy.array(mask_img_pil)
+
+    if False and USE_CLIPSEG:
+        mask_np = bgremove_clip(orig_img_np, ["flask"], max_val=255)
+        # (mask_np == 255).astype(np.uint8).sum()
+        utils.cipdb('DBG_CLIPSEG')
     else:
-        if True:
-            # import ipdb; ipdb.set_trace()            
-            if False and USE_CLIPSEG:
-                mask_np = bgremove_clip(orig_img_np, ["flask"], max_val=255)
-                # (mask_np == 255).astype(np.uint8).sum()
-                utils.cipdb('DBG_CLIPSEG')
-            else:
-                mask_img_pil = remove(orig_img_pil)  # remove background
-                mask_np = np.array(mask_img_pil).astype(np.float32)
-                mask_np = mask_np[..., -1]
+        mask_img_pil = remove(orig_img_pil)  # remove background
+        mask_np = np.array(mask_img_pil).astype(np.float32)
+        mask_np = mask_np[..., -1]
 
-            mask_np = np.stack([mask_np, mask_np, mask_np], axis=-1)
-            if mask_np.max() > 1:
-                mask_np = mask_np / 255.
-            mask_np = (mask_np > 0.5).astype(np.float32)
-        else:
-            mask_np = create_mask(orig_img_np)
-            mask_np = (mask_np > 0.5).astype(np.float32)
-            # import ipdb; ipdb.set_trace()
-        # mask_img_pil = Image.fromarray((mask_np*255.).astype(np.uint8)).convert('L')
-        # import ipdb;ipdb.set_trace()
-    # return orig_img_pil,mask_np,mask_img_pil
-
+    mask_np = np.stack([mask_np, mask_np, mask_np], axis=-1)
+    if mask_np.max() > 1:
+        mask_np = mask_np / 255.
+    mask_np = (mask_np > 0.5).astype(np.float32)
     return orig_img_np, mask_np
-
 
 ####################################################################
 
@@ -168,26 +128,6 @@ def place_in_large_image(orig_img_np, orig_mask_np):
         target_height = (current_height / current_width) * target_width
         target_height = int(target_height)
         # import pdb; pdb.set_trace()
-    if False:
-        obj_height = orig_mask_np[..., 0].sum(axis=0).max()
-        obj_width = orig_mask_np[..., 0].sum(axis=1).max()
-        obj_height_ratio = obj_height / orig_mask_np.shape[0]
-        obj_width_ratio = obj_width / orig_mask_np.shape[1]
-        target_obj_height_ratio = 0.5
-        target_obj_width_ratio = 0.2
-        # .....................................
-        # get 2 possible target height,wdth pairs, and choose the larger one
-        # target_obj_height_ratio = (obj_height_ratio * target_height)/512
-        target_height1 = obj_height_ratio / (512 * target_obj_height_ratio)
-        # target_height/target_width = orig_mask_np.shape[0]/orig_mask_np.shape[1]
-        target_width1 = target_height1 / (orig_mask_np.shape[0] / orig_mask_np.shape[1])
-        target_width2 = obj_width_ratio / (512 / target_obj_width_ratio)
-        target_height2 = target_width2 / (orig_mask_np.shape[1] / orig_mask_np.shape[0])
-        if target_width2 > target_width1:
-            target_height, target_width = target_height2, target_width2
-        else:
-            target_height, target_width = target_height1, target_width1
-    # import ipdb; ipdb.set_trace()
     # .....................................
     # small_res_np = np.array(orig_img_pil.resize((256,256)))
     small_res_np = skimage.transform.resize(orig_img_np, (target_height, target_width))
@@ -210,9 +150,7 @@ def place_in_large_image(orig_img_np, orig_mask_np):
 
     large_mask_np = np.full((512, 512, 3), 0, dtype=np.float32)
     large_mask_np[y_offset:y_offset + small_out_np.shape[0], x_offset:x_offset + small_out_np.shape[1]] = small_mask_np
-    # ==============================================================
-    # pdb.set_trace()
-    # import ipdb; ipdb.set_trace()
+
     return large_img_np, large_mask_np
 
 
@@ -409,100 +347,96 @@ def run(impath=None,
     print(colorful.cyan('using parallel'))
     orig_img_np, orig_mask_np = prepare_image(impath=impath, im_np=im_np)
 
-    # import ipdb; ipdb.set_trace()
-
     large_image_np, large_mask_np = place_in_large_image(orig_img_np, orig_mask_np)
     inverted_large_mask_np = 1 - large_mask_np
-    GOOD = False
-    print("HERE IN RUN FUNCTION") 
+    print("HERE IN RUN FUNCTION")
     pipe = init_sd(device="cuda")
     pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config) ## 12 may , diggy- changing the scheduler from defualt PNDM (50 inference steps)
-    while not GOOD:
 
-        print("in GOOD section")
-        ## Testing the Stable Diffusion: 
-        # new_image = pipe(prompt=prompt, image=image, mask_image=inverted_mask, negative_prompt=neg_prompt, num_inference_steps=50,
-        # guidance_scale=8).images[0]
+    print("in GOOD section")
+    ## Testing the Stable Diffusion:
+    # new_image = pipe(prompt=prompt, image=image, mask_image=inverted_mask, negative_prompt=neg_prompt, num_inference_steps=50,
+    # guidance_scale=8).images[0]
 
-        inverted_large_mask_pil = Image.fromarray((inverted_large_mask_np * 255.).astype(np.uint8)).convert('RGB')
-        large_image_pil = Image.fromarray((large_image_np * 255.).astype(np.uint8)).convert('RGB')
-        # import ipdb; ipdb.set_trace()
-        num_inference_steps = 25
-        if os.environ.get('DBG_FAST_SD', False):
-            num_inference_steps = int(os.environ['DBG_FAST_SD'])
-        ngen = 2
-        G = []
-        import random
-        for i in range(ngen):
-            Gi = torch.Generator(device="cuda")
-            Gi.manual_seed(random.randint(0, 1000))   ## diggy 13 may : randomization instead of setting 'i' seed 
-            G.append(Gi)
-        import torchvision
-        large_image_tensor = torchvision.transforms.ToTensor()(large_image_pil).repeat(ngen,1,1,1)
-        inverted_large_mask_tensor = torchvision.transforms.ToTensor()(inverted_large_mask_pil).repeat(ngen,1,1,1)
-        inverted_large_mask_tensor = inverted_large_mask_tensor[:,:1]
-        neg_prompts = [neg_prompt for _ in range(ngen)]
-        prompts = [prompt for _ in range(ngen)]
+    inverted_large_mask_pil = Image.fromarray((inverted_large_mask_np * 255.).astype(np.uint8)).convert('RGB')
+    large_image_pil = Image.fromarray((large_image_np * 255.).astype(np.uint8)).convert('RGB')
+    # import ipdb; ipdb.set_trace()
+    num_inference_steps = 25
+    if os.environ.get('DBG_FAST_SD', False):
+        num_inference_steps = int(os.environ['DBG_FAST_SD'])
+    ngen = 2
+    G = []
+    import random
+    for i in range(ngen):
+        Gi = torch.Generator(device="cuda")
+        Gi.manual_seed(random.randint(0, 1000))   ## diggy 13 may : randomization instead of setting 'i' seed
+        G.append(Gi)
+    import torchvision
+    large_image_tensor = torchvision.transforms.ToTensor()(large_image_pil).repeat(ngen,1,1,1)
+    inverted_large_mask_tensor = torchvision.transforms.ToTensor()(inverted_large_mask_pil).repeat(ngen,1,1,1)
+    inverted_large_mask_tensor = inverted_large_mask_tensor[:,:1]
+    neg_prompts = [neg_prompt for _ in range(ngen)]
+    prompts = [prompt for _ in range(ngen)]
+    start_time = time.time()
+    new_image_obj = pipe(prompt=prompts,
+                        image=large_image_tensor,
+                          mask_image=inverted_large_mask_tensor,
+                         negative_prompt=neg_prompts,
+                         num_inference_steps=num_inference_steps,
+                         guidance_scale=8,generator=G)
+    print("=======> step: SD generation--- %s seconds ---" % (time.time() - start_time))
+
+    #import ipdb;ipdb.set_trace()
+    for gen_image_pil in new_image_obj.images:
         start_time = time.time()
-        new_image_obj = pipe(prompt=prompts, 
-                            image=large_image_tensor, 
-                              mask_image=inverted_large_mask_tensor,
-                             negative_prompt=neg_prompts, 
-                             num_inference_steps=num_inference_steps,
-                             guidance_scale=8,generator=G)
-        print("=======> step: SD generation--- %s seconds ---" % (time.time() - start_time))
+        #gen_image_pil = new_image_obj.images[0]
+        gen_image_np = np.array(gen_image_pil) / 255.
+        #skimage.io.imsave('gen_image_np.png', gen_image_np)
+        # orig_img_pil = gen_image_pil
+        if False and 'mask using polygon':
+            ####################################################################
+            coords2 = "191,104,190,389,308,387,308,106"
+            coords2 = coords2.split(',')
+            poly_coord = []
+            for i in coords2:
+                poly_coord.append(int(i))
+            ####################################################################
 
-        #import ipdb;ipdb.set_trace()
-        for gen_image_pil in new_image_obj.images:
-            start_time = time.time()
-            #gen_image_pil = new_image_obj.images[0]
-            gen_image_np = np.array(gen_image_pil) / 255.
-            #skimage.io.imsave('gen_image_np.png', gen_image_np)
-            # orig_img_pil = gen_image_pil
-            if False and 'mask using polygon':
-                ####################################################################
-                coords2 = "191,104,190,389,308,387,308,106"
-                coords2 = coords2.split(',')
-                poly_coord = []
-                for i in coords2:
-                    poly_coord.append(int(i))
-                ####################################################################
+            polygon = poly_coord  # [(x1,y1),(x2,y2),...] or [x1,y1,x2,y2,...]
+            width = gen_image_pil.size[0]
+            height = gen_image_pil.size[1]
 
-                polygon = poly_coord  # [(x1,y1),(x2,y2),...] or [x1,y1,x2,y2,...]
-                width = gen_image_pil.size[0]
-                height = gen_image_pil.size[1]
+            img_pil = Image.new('L', (width, height), 0)
+            ImageDraw.Draw(img_pil).polygon(polygon, outline=1, fill=1)
+            mask_np = numpy.array(img_pil)
+            # assert False
 
-                img_pil = Image.new('L', (width, height), 0)
-                ImageDraw.Draw(img_pil).polygon(polygon, outline=1, fill=1)
-                mask_np = numpy.array(img_pil)
-                # assert False
+        # large_img_mask_np,gen_mask_np,gen_image_np = create_masks(orig_img_pil,gen_image_np)
+        gen_mask_np = create_mask(gen_image_np)
+        assert gen_mask_np.max() <= 1
+        # if large_img_mask_np.max() >1:
+        #     large_img_mask_np = large_img_mask_np/255.
+        # if gen_mask_np.max() >1:
+        #     gen_mask_np = gen_mask_np/255.
+        large_mask_np_float = large_mask_np
+        large_mask_np = (large_mask_np > 0.5).astype(np.float32)
 
-            # large_img_mask_np,gen_mask_np,gen_image_np = create_masks(orig_img_pil,gen_image_np)
-            gen_mask_np = create_mask(gen_image_np)
-            assert gen_mask_np.max() <= 1
-            # if large_img_mask_np.max() >1:
-            #     large_img_mask_np = large_img_mask_np/255.
-            # if gen_mask_np.max() >1:
-            #     gen_mask_np = gen_mask_np/255.
-            large_mask_np_float = large_mask_np
-            large_mask_np = (large_mask_np > 0.5).astype(np.float32)
-
-            area_discrepancy = np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum() / np.abs(
-                large_mask_np[:, :, -1]).sum()
-            # area_discrepancy2 = worst_mask_np[:,:].sum()/large_mask_np[:,:,-1].sum()
-            print(colorful.red("remove images that have large holes"))
-            print(np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum())
-            print(np.abs(large_mask_np[:, :, -1]).sum())
-            print(area_discrepancy)
-            print("=======> step: area discrepancy calculation--- %s seconds ---" % (time.time() - start_time))
+        area_discrepancy = np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum() / np.abs(
+            large_mask_np[:, :, -1]).sum()
+        # area_discrepancy2 = worst_mask_np[:,:].sum()/large_mask_np[:,:,-1].sum()
+        print(colorful.red("remove images that have large holes"))
+        print(np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum())
+        print(np.abs(large_mask_np[:, :, -1]).sum())
+        print(area_discrepancy)
+        print("=======> step: area discrepancy calculation--- %s seconds ---" % (time.time() - start_time))
 
 
-            if area_discrepancy < 0.6: # this value was 0.2 in aniket's version, doing it to kill the while loop
-                GOOD = True
-                break
-            else:
-                print(colorful.yellow("too large a difference in sizes of generated object and original object, redoing"))
-            # import ipdb; ipdb.set_trace()        
+        if area_discrepancy < 0.6: # this value was 0.2 in aniket's version, doing it to kill the while loop
+            GOOD = True
+            break
+        else:
+            print(colorful.yellow("too large a difference in sizes of generated object and original object, redoing"))
+        # import ipdb; ipdb.set_trace()
 
             # mask_np = (gen_mask_np>0.5).astype(np.float32)
     start_time = time.time()
@@ -511,28 +445,13 @@ def run(impath=None,
 
     holefilled_np = tensor_to_numpy(holefilled[:, :3].permute(0, 2, 3, 1)[0])
     extras = {'holefilled': holefilled_np, 'initial_repasted': repasted_np}
-    # import ipdb; ipdb.set_trace()
     # ============================================================
     # vae fine tuning
     # prev_pil = Image.fromarray((repasted_np*255.).astype(np.uint8)).convert('L')
     # prev_mask_pil = remove(prev_pil)
     # prev_mask_np = np.array(prev_mask_pil).astype(np.float32)        
     repasted2_np = repasted_np
-    if False:
-        for i in range(1):
-            repasted2_np = vae_encode_decode(repasted2_np, pipe)
-            # repasted2_pil = Image.fromarray((repasted2_np*255.).astype(np.uint8)).convert('L')
-            # repasted2_mask_pil = remove(repasted2_pil)
-            # repasted2_mask_np = np.array(repasted2_mask_pil).astype(np.float32)   
-            # repasted2_mask_np = repasted2_mask_np[...,-1]    
-            # if repasted2_mask_np.max() > 1:
-            #     repasted2_mask_np = repasted2_mask_np/255.        
-            repasted2_mask_np = create_mask(repasted2_np)
-            repasted2_np, _ = holefill_and_repaste(large_image_np, repasted2_np, repasted2_mask_np, large_mask_np)
-            # ============================================================
 
-    # import ipdb; ipdb.set_trace()
-    # return     
     return gen_image_np, repasted2_np, extras, large_image_np
 
 def run_on_folder(folder, results_root='results'):
@@ -540,13 +459,7 @@ def run_on_folder(folder, results_root='results'):
         os.makedirs(results_root)
     for impath in glob.glob(os.path.join(folder, '*')):
         print(impath)
-        if False:
-            im = skimage.io.imread(impath)
-            if im.dtype != np.uint8:
-                im = (im * 255).astype(np.uint8)
-            gen_image_np, repasted_np, extras, inp_image_np = run(im_np=im)
-        else:
-            gen_image_np, repasted_np, extras, inp_image_np = run(impath=impath)
+        gen_image_np, repasted_np, extras, inp_image_np = run(impath=impath)
 
         save_results(impath, results_root,
                      gen_image_np, repasted_np, inp_image_np, extras)
@@ -559,8 +472,6 @@ def run_on_folder(folder, results_root='results'):
         if os.environ.get('DBG_SHIFTED_DOWN', False) == '1':
             import sys
             sys.exit()
-
-
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -580,38 +491,27 @@ def upload_cloudinary(filename, width, height):
     )
     return img_url
 
-
-
-@app.route("/removeBg",methods=['GET', 'POST'])
 def process_image():
     output_image_name = ''
     filename = ''
     img_url = ''
-    prompt = request.form['text']
-    # ADD TRY CATCH AND SEND FAILURE REASON 
-    # ADD LOGGING FOR DIFFERENT TYPES OF FAILURES 
-    if len(prompt) == 0:
-        print("Prompt is empty")
-
-#    return jsonify({'msg': 'success',
-#                    'input_url': 'https://res.cloudinary.com/db5g1vegd/image/upload/c_fill,h_512,w_512/j3b5ywmibx30qdntttug.png',
-#                    'output_url_1024': 'https://res.cloudinary.com/db5g1vegd/image/upload/c_fill,h_512,w_512/j3b5ywmibx30qdntttug.png',
-#                    'output_url_512': 'https://res.cloudinary.com/db5g1vegd/image/upload/c_fill,h_512,w_512/j3b5ywmibx30qdntttug.png',
-#                    })
-
+    jobId = ''
     try:
-        if request.method == 'POST':
-            if 'file' not in request.files:
-                print('No file attached in request')
-                return redirect(request.url)
-        file = request.files['file']
-        if file.filename == '':
+        prompt = int(sys.argv[1])
+        filePath = sys.argv[2]
+        filename = os.path.basename(filePath)
+
+        jobId = int(sys.argv[3])
+    # ADD TRY CATCH AND SEND FAILURE REASON
+    # ADD LOGGING FOR DIFFERENT TYPES OF FAILURES 
+        if len(prompt) == 0:
+            print("Prompt is empty")
+
+        if filename == '':
             print('No file selected')
-            return redirect(request.url)
-        if file and allowed_file(file.filename):
-            print('IN UPLOADED FILES')
-            filename = file.filename #input image filename
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'],filename))
+
+        if filename and allowed_file(filename):
+            print('IN PROCESSING SECTION')
 
             img_url = upload_cloudinary(filename, 1024, 1024)
             file_extension = get_file_extension(filename)
@@ -644,52 +544,6 @@ def process_image():
 
 
 
-
-@app.route("/taskQueueSample",methods=['GET', 'POST'])
-def process_image():
-    output_image_name = ''
-    filename = ''
-    img_url = ''
-    prompt = request.form['text']
-    # ADD TRY CATCH AND SEND FAILURE REASON
-    # ADD LOGGING FOR DIFFERENT TYPES OF FAILURES
-    if len(prompt) == 0:
-        print("Prompt is empty")
-
-    try:
-        if request.method == 'POST':
-            if 'file' not in request.files:
-                print('No file attached in request')
-                return redirect(request.url)
-        file = request.files['file']
-        if file.filename == '':
-            print('No file selected')
-            return redirect(request.url)
-        if file and allowed_file(file.filename):
-            print('IN UPLOADED FILES')
-            filename = file.filename #input image filename
-            file.save(os.path.join(app.config['UPLOAD_FOLDER'],filename))
-
-            inputImagePath = os.path.join(app.config['UPLOAD_FOLDER'],filename)
-            jobId  = generate_job_id()
-            subprocess.Popen(["python", "inpainting_task.py", str(prompt), inputImagePath, jobId])
-
-        return jsonify({'msg': 'success',
-                        jobId: jobId})
-    except Exception as e:
-        print("An error occurred:", str(e))
-        return jsonify({'msg': 'failure',
-                         'reason': str(e)})
-
-
-@app.route('/image')
-def get_image():
-    return send_file(os.path.join(app.config['UPLOAD_FOLDER'],'image.jpg'), mimetype='image/jpg')
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
 @app.route('/', methods=['GET','POST'])
 def upload_file():
     upload_result = None
@@ -721,41 +575,8 @@ def upload_file():
 
         return redirect(url_for('uploaded_file', filename=output_image_name))
 
-@app.route('/uploads/<filename>')
-def uploaded_file(filename):
-    return render_template('uploaded.html', filename=filename,filepath=os.path.join(app.config['UPLOAD_FOLDER'],filename))
 
-@app.route('/display/<filename>')
-def display_image1(filename):
-	#print('display_image filename: ' + filename)
-	return redirect(url_for('static', filename=os.path.join(app.config['UPLOAD_FOLDER'],filename)), code=301)
-
-@app.route('/download/<path:filename>', methods=['GET', 'POST'])
-def download(filename):
-    # Appending app path to upload folder path within app root folder
-    path1 =os.path.join(app.config['UPLOAD_FOLDER'],filename)
-
-    print("FINAL DOWNLOAD PATH  "  + path1)
-    return send_file(path1, as_attachment=True)
-
-@app.route('/display_image/<path:filename>', methods=['GET', 'POST'])
-def display_image(filename):
-    # Appending app path to upload folder path within app root folder
-    print("FINAL DISPLAY PATH  "  + os.path.join(app.config['UPLOAD_FOLDER'],filename))
-    return send_file(os.path.join(app.config['UPLOAD_FOLDER'],filename), mimetype='image/jpeg')
-   # return os.path.join(app.config['UPLOAD_FOLDER'],filename)
 
 def get_file_extension(filename):
     return filename.rsplit('.', 1)[1]
-
-
-def generate_job_id():
-    job_id = "JOB" + str(uuid.uuid4().hex)[:8]
-    return job_id
-
-
-if __name__ == '__main__':
-   app.run()
-#    serve(app, threads = max_threads, host='0.0.0.0', port=8080)
-
 
