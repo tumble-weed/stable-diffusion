@@ -47,7 +47,8 @@ import cloudinary
 from cloudinary.uploader import upload
 import cloudinary.api
 from cloudinary.utils import cloudinary_url
-
+import uuid
+import subprocess
 
 app = Flask(__name__)
 UPLOAD_FOLDER = os.path.dirname(os.path.abspath(__file__)) 
@@ -768,6 +769,49 @@ def display_image(filename):
 
 def get_file_extension(filename):
     return filename.rsplit('.', 1)[1]
+
+
+
+@app.route("/taskQueueSample",methods=['GET', 'POST'])
+def process_image():
+    output_image_name = ''
+    filename = ''
+    img_url = ''
+    prompt = request.form['text']
+    # ADD TRY CATCH AND SEND FAILURE REASON
+    # ADD LOGGING FOR DIFFERENT TYPES OF FAILURES
+    if len(prompt) == 0:
+        print("Prompt is empty")
+
+    try:
+        if request.method == 'POST':
+            if 'file' not in request.files:
+                print('No file attached in request')
+                return redirect(request.url)
+        file = request.files['file']
+        if file.filename == '':
+            print('No file selected')
+            return redirect(request.url)
+        if file and allowed_file(file.filename):
+            print('IN UPLOADED FILES')
+            filename = file.filename #input image filename
+            file.save(os.path.join(app.config['UPLOAD_FOLDER'],filename))
+
+            inputImagePath = os.path.join(app.config['UPLOAD_FOLDER'],filename)
+            jobId  = generate_job_id()
+            subprocess.Popen(["python", "inpainting_task.py", str(prompt), inputImagePath, jobId])
+
+        return jsonify({'msg': 'success',
+                        jobId: jobId})
+    except Exception as e:
+        print("An error occurred:", str(e))
+        return jsonify({'msg': 'failure',
+                         'reason': str(e)})
+
+
+def generate_job_id():
+    job_id = "JOB" + str(uuid.uuid4().hex)[:8]
+    return job_id
 
 
 if __name__ == '__main__':
