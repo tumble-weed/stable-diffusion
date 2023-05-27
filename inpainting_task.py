@@ -375,7 +375,6 @@ def vae_encode_decode(repasted_np, pipe):
     repasted2_np = tensor_to_numpy(repasted2.permute(0, 2, 3, 1))[0]
     return repasted2_np
 
-
 def run(impath=None,
         im_np=None,
         prompt="hyperrealistic photo of the object lying on a table in front of nigara falls. HD, 4K, 8K, render, lens flare, product photo, generate new prospective",
@@ -391,120 +390,119 @@ def run(impath=None,
                 im_tmp = (orig_img_np * 255).astype(np.uint8)
                 im_ = Image.fromarray(im_tmp, "RGB")
                 im_.save('results/debug/input_img.jpeg')
-
+            
         # import ipdb; ipdb.set_trace()
-        # large_image_np, large_mask_np = place_in_large_image(orig_img_np, orig_mask_np)
+        #large_image_np, large_mask_np = place_in_large_image(orig_img_np, orig_mask_np)
         large_image_np, large_mask_np = orig_img_np, orig_mask_np
         if save_debug == True:
             if large_image_np.dtype != np.uint8:
                 im_tmp = (large_image_np * 255).astype(np.uint8)
                 im_ = Image.fromarray(im_tmp, "RGB")
                 im_.save('results/debug/large_img.jpeg')
-
+                
         inverted_large_mask_np = 1 - large_mask_np
-        print("HERE IN RUN FUNCTION , & large img is orig_img now")
+        GOOD = False
+        print("HERE IN RUN FUNCTION , & large img is orig_img now") 
         pipe = init_sd(device="cuda")
-        pipe.scheduler = DPMSolverMultistepScheduler.from_config(
-            pipe.scheduler.config)  ## 12 may , diggy- changing the scheduler from defualt PNDM (50 inference steps)
+        pipe.scheduler = DPMSolverMultistepScheduler.from_config(pipe.scheduler.config) ## 12 may , diggy- changing the scheduler from defualt PNDM (50 inference steps)
         num_inference_steps = 25
+        while not GOOD:
+
+            print("in GOOD section")
+            ## Testing the Stable Diffusion: 
+            # new_image = pipe(prompt=prompt, image=image, mask_image=inverted_mask, negative_prompt=neg_prompt, num_inference_steps=50,
+            # guidance_scale=8).images[0]
+
+            inverted_large_mask_pil = Image.fromarray((inverted_large_mask_np * 255.).astype(np.uint8)).convert('RGB')
+            large_image_pil = Image.fromarray((large_image_np * 255.).astype(np.uint8)).convert('RGB')
+            # import ipdb; ipdb.set_trace()
+            if os.environ.get('DBG_FAST_SD', False):
+                num_inference_steps = int(os.environ['DBG_FAST_SD'])
+            ngen = 2
+            G = []
+            print("ngen is " + str(ngen))
+            import random
+            for i in range(ngen):
+                Gi = torch.Generator(device="cuda")
+                Gi.manual_seed(random.randint(0, 100000))   ## diggy 13 may : randomization instead of setting 'i' seed 
+                G.append(Gi)
+            import torchvision
+            large_image_tensor = torchvision.transforms.ToTensor()(large_image_pil).repeat(ngen,1,1,1)
+            inverted_large_mask_tensor = torchvision.transforms.ToTensor()(inverted_large_mask_pil).repeat(ngen,1,1,1)
+            inverted_large_mask_tensor = inverted_large_mask_tensor[:,:1]
+            neg_prompts = [neg_prompt for _ in range(ngen)]
+            prompts = [prompt for _ in range(ngen)]
+            start_time = time.time()
+            new_image_obj = pipe(prompt=prompts, 
+                                 #image=large_image_tensor, 
+                                 # mask_image=inverted_large_mask_tensor,
+                                 image=[large_image_pil for _ in range(ngen)], 
+                                  mask_image=[inverted_large_mask_pil for _ in range(ngen)],
+                                 negative_prompt=neg_prompts, 
+                                 num_inference_steps=num_inference_steps,
+                                 guidance_scale=8,
+                                generator=G
+                            )
+            print("=======> step: SD generation--- %s seconds ---" % (time.time() - start_time))
+
+            #import ipdb;ipdb.set_trace()
+            for gen_image_pil in new_image_obj.images:
+                start_time = time.time()
+                #gen_image_pil = new_image_obj.images[0]
+                gen_image_np = np.array(gen_image_pil) / 255.
+                #skimage.io.imsave('gen_image_np.png', gen_image_np)
+                # orig_img_pil = gen_image_pil
+                if False and 'mask using polygon':
+                    ####################################################################
+                    coords2 = "191,104,190,389,308,387,308,106"
+                    coords2 = coords2.split(',')
+                    poly_coord = []
+                    for i in coords2:
+                        poly_coord.append(int(i))
+                    ####################################################################
+
+                    polygon = poly_coord  # [(x1,y1),(x2,y2),...] or [x1,y1,x2,y2,...]
+                    width = gen_image_pil.size[0]
+                    height = gen_image_pil.size[1]
+
+                    img_pil = Image.new('L', (width, height), 0)
+                    ImageDraw.Draw(img_pil).polygon(polygon, outline=1, fill=1)
+                    mask_np = numpy.array(img_pil)
+                    # assert False
+
+                # large_img_mask_np,gen_mask_np,gen_image_np = create_masks(orig_img_pil,gen_image_np)
+                gen_mask_np = create_mask(gen_image_np)
+                assert gen_mask_np.max() <= 1
+                # if large_img_mask_np.max() >1:
+                #     large_img_mask_np = large_img_mask_np/255.
+                # if gen_mask_np.max() >1:
+                #     gen_mask_np = gen_mask_np/255.
+                large_mask_np_float = large_mask_np
+                large_mask_np = (large_mask_np > 0.5).astype(np.float32)
+
+                #area_discrepancy = np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum() / np.abs(
+                #    large_mask_np[:, :, -1]).sum()
+                # area_discrepancy2 = worst_mask_np[:,:].sum()/large_mask_np[:,:,-1].sum()
+                lowest_gen = find_lowest_point(gen_mask_np)
+                lowest_inp = find_lowest_point(large_mask_np)
+                height_discrepancy = np.abs(lowest_gen - lowest_inp) / gen_mask_np.shape[0]
+                print("height discrepancy ==> " , height_discrepancy) 
+                print(colorful.red("remove images that have large holes"))
+                #print(np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum())
+                #print(np.abs(large_mask_np[:, :, -1]).sum())
+                #print("area discrepancy ==> " , area_discrepancy)
+                print("=======> step: area discrepancy calculation--- %s seconds ---" % (time.time() - start_time))
 
 
-    print("in GOOD section")
-    ## Testing the Stable Diffusion:
-    # new_image = pipe(prompt=prompt, image=image, mask_image=inverted_mask, negative_prompt=neg_prompt, num_inference_steps=50,
-    # guidance_scale=8).images[0]
-
-    inverted_large_mask_pil = Image.fromarray((inverted_large_mask_np * 255.).astype(np.uint8)).convert('RGB')
-    large_image_pil = Image.fromarray((large_image_np * 255.).astype(np.uint8)).convert('RGB')
-    # import ipdb; ipdb.set_trace()
-    if os.environ.get('DBG_FAST_SD', False):
-        num_inference_steps = int(os.environ['DBG_FAST_SD'])
-    ngen = 2
-    G = []
-    print("ngen is " + str(ngen))
-    import random
-    for i in range(ngen):
-        Gi = torch.Generator(device="cuda")
-        Gi.manual_seed(random.randint(0, 100000))  ## diggy 13 may : randomization instead of setting 'i' seed
-        G.append(Gi)
-    import torchvision
-    large_image_tensor = torchvision.transforms.ToTensor()(large_image_pil).repeat(ngen, 1, 1, 1)
-    inverted_large_mask_tensor = torchvision.transforms.ToTensor()(inverted_large_mask_pil).repeat(ngen, 1, 1,
-                                                                                                   1)
-    inverted_large_mask_tensor = inverted_large_mask_tensor[:, :1]
-    neg_prompts = [neg_prompt for _ in range(ngen)]
-    prompts = [prompt for _ in range(ngen)]
-    start_time = time.time()
-    new_image_obj = pipe(prompt=prompts,
-                         # image=large_image_tensor,
-                         # mask_image=inverted_large_mask_tensor,
-                         image=[large_image_pil for _ in range(ngen)],
-                         mask_image=[inverted_large_mask_pil for _ in range(ngen)],
-                         negative_prompt=neg_prompts,
-                         num_inference_steps=num_inference_steps,
-                         guidance_scale=8,
-                         generator=G
-                         )
-    print("=======> step: SD generation--- %s seconds ---" % (time.time() - start_time))
-
-    # import ipdb;ipdb.set_trace()
-    for gen_image_pil in new_image_obj.images:
-        start_time = time.time()
-        # gen_image_pil = new_image_obj.images[0]
-        gen_image_np = np.array(gen_image_pil) / 255.
-        # skimage.io.imsave('gen_image_np.png', gen_image_np)
-        # orig_img_pil = gen_image_pil
-        if False and 'mask using polygon':
-            ####################################################################
-            coords2 = "191,104,190,389,308,387,308,106"
-            coords2 = coords2.split(',')
-            poly_coord = []
-            for i in coords2:
-                poly_coord.append(int(i))
-            ####################################################################
-
-            polygon = poly_coord  # [(x1,y1),(x2,y2),...] or [x1,y1,x2,y2,...]
-            width = gen_image_pil.size[0]
-            height = gen_image_pil.size[1]
-
-            img_pil = Image.new('L', (width, height), 0)
-            ImageDraw.Draw(img_pil).polygon(polygon, outline=1, fill=1)
-            mask_np = numpy.array(img_pil)
-            # assert False
-
-        # large_img_mask_np,gen_mask_np,gen_image_np = create_masks(orig_img_pil,gen_image_np)
-        gen_mask_np = create_mask(gen_image_np)
-        assert gen_mask_np.max() <= 1
-        # if large_img_mask_np.max() >1:
-        #     large_img_mask_np = large_img_mask_np/255.
-        # if gen_mask_np.max() >1:
-        #     gen_mask_np = gen_mask_np/255.
-        large_mask_np_float = large_mask_np
-        large_mask_np = (large_mask_np > 0.5).astype(np.float32)
-
-        # area_discrepancy = np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum() / np.abs(
-        #    large_mask_np[:, :, -1]).sum()
-        # area_discrepancy2 = worst_mask_np[:,:].sum()/large_mask_np[:,:,-1].sum()
-        lowest_gen = find_lowest_point(gen_mask_np)
-        lowest_inp = find_lowest_point(large_mask_np)
-        height_discrepancy = np.abs(lowest_gen - lowest_inp) / gen_mask_np.shape[0]
-        print("height discrepancy ==> ", height_discrepancy)
-        print(colorful.red("remove images that have large holes"))
-        # print(np.abs(gen_mask_np[:, :, -1] - large_mask_np[:, :, -1]).sum())
-        # print(np.abs(large_mask_np[:, :, -1]).sum())
-        # print("area discrepancy ==> " , area_discrepancy)
-        print("=======> step: area discrepancy calculation--- %s seconds ---" % (time.time() - start_time))
-
-        # if area_discrepancy < 0.6: # this value was 0.2 in aniket's version, doing it to kill the while loop
-        #    GOOD = True
-        #    break
-        if height_discrepancy < 0.1171875:  # corresponds to 60 / 512 pixels
-            GOOD = True
-            break
-        else:
-            print(colorful.yellow(
-                "too large a difference in sizes of generated object and original object, redoing"))
-        # import ipdb; ipdb.set_trace()
+                #if area_discrepancy < 0.6: # this value was 0.2 in aniket's version, doing it to kill the while loop
+                #    GOOD = True
+                #    break
+                if height_discrepancy < 0.1171875: # corresponds to 60 / 512 pixels 
+                    GOOD = True
+                    break
+                else:
+                    print(colorful.yellow("too large a difference in sizes of generated object and original object, redoing"))
+                # import ipdb; ipdb.set_trace()        
 
                 # mask_np = (gen_mask_np>0.5).astype(np.float32)
         if save_debug == True:
@@ -523,16 +521,28 @@ def run(impath=None,
         # vae fine tuning
         # prev_pil = Image.fromarray((repasted_np*255.).astype(np.uint8)).convert('L')
         # prev_mask_pil = remove(prev_pil)
-        # prev_mask_np = np.array(prev_mask_pil).astype(np.float32)
+        # prev_mask_np = np.array(prev_mask_pil).astype(np.float32)        
         repasted2_np = repasted_np
         if save_debug == True:
             if repasted2_np.dtype != np.uint8:
                 im_tmp = (repasted2_np * 255).astype(np.uint8)
                 im_ = Image.fromarray(im_tmp, "RGB")
                 im_.save('results/debug/repasted.jpeg')
-                os.system('rclone sync -Pv results/debug aniket-gdrive:stable-diffusion-experiments/debugging/platform')
+                os.system('rclone sync -Pv results/debug aniket-gdrive:stable-diffusion-experiments/debugging/platform')    
+        if False:
+            for i in range(1):
+                repasted2_np = vae_encode_decode(repasted2_np, pipe)
+                # repasted2_pil = Image.fromarray((repasted2_np*255.).astype(np.uint8)).convert('L')
+                # repasted2_mask_pil = remove(repasted2_pil)
+                # repasted2_mask_np = np.array(repasted2_mask_pil).astype(np.float32)   
+                # repasted2_mask_np = repasted2_mask_np[...,-1]    
+                # if repasted2_mask_np.max() > 1:
+                #     repasted2_mask_np = repasted2_mask_np/255.        
+                repasted2_mask_np = create_mask(repasted2_np)
+                repasted2_np, _ = holefill_and_repaste(large_image_np, repasted2_np, repasted2_mask_np, large_mask_np)
+                # ============================================================
 
-        # return
+        # return     
         print("=======> RUN function time --- %s seconds ---" % (time.time() - start_run))
         return gen_image_np, repasted2_np, extras, large_image_np
 
@@ -602,7 +612,7 @@ def process_image(prompt, filename, filePath, jobId):
             file_extension = get_file_extension(filename)
             impath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
             gen_image_np, repasted_np, extras,inp_image_np = run(impath=impath, prompt=prompt)
-
+            print("RECEIVED OUTPUT FROM RUN FUNCTUON " ) 
             output_image_name = filename.replace('.'+ file_extension, '') + "-generated.png"
             output_path = os.path.join(app.config['UPLOAD_FOLDER'],output_image_name)
 

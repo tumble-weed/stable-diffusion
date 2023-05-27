@@ -49,6 +49,9 @@ import cloudinary.api
 from cloudinary.utils import cloudinary_url
 import uuid
 import subprocess
+import atexit
+subprocesses = []
+
 
 app = Flask(__name__)
 UPLOAD_FOLDER = os.path.dirname(os.path.abspath(__file__)) 
@@ -802,7 +805,10 @@ def taskQueueProcessor():
 
             process = subprocess.Popen(["python", "inpainting_task.py", str(prompt), inputImagePath, jobId],
 stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+            subprocesses.append(process)
+
             for line in iter(process.stdout.readline, b''):
+                line = line.decode('utf-8') 
                 print(">>> " + line.rstrip())
             process.communicate()
             print("TASK ADDED TO QUEUE" ) 
@@ -817,6 +823,14 @@ stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
 def generate_job_id():
     job_id = "JOB" + str(uuid.uuid4().hex)[:8]
     return job_id
+
+def cleanup_subprocesses():
+    for subprocess_obj in subprocesses:
+        subprocess_obj.terminate()  
+
+atexit.register(cleanup_subprocesses)
+
+
 
 
 if __name__ == '__main__':
