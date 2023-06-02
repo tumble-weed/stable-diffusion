@@ -40,6 +40,8 @@ import cloudinary
 from cloudinary.uploader import upload
 import cloudinary.api
 from cloudinary.utils import cloudinary_url
+import concurrent.futures
+
 
 app = Flask(__name__)
 UPLOAD_FOLDER = os.path.dirname(os.path.abspath(__file__))
@@ -529,18 +531,6 @@ def run(impath=None,
                 im_ = Image.fromarray(im_tmp, "RGB")
                 im_.save('results/debug/repasted.jpeg')
                 os.system('rclone sync -Pv results/debug aniket-gdrive:stable-diffusion-experiments/debugging/platform')    
-        if False:
-            for i in range(1):
-                repasted2_np = vae_encode_decode(repasted2_np, pipe)
-                # repasted2_pil = Image.fromarray((repasted2_np*255.).astype(np.uint8)).convert('L')
-                # repasted2_mask_pil = remove(repasted2_pil)
-                # repasted2_mask_np = np.array(repasted2_mask_pil).astype(np.float32)   
-                # repasted2_mask_np = repasted2_mask_np[...,-1]    
-                # if repasted2_mask_np.max() > 1:
-                #     repasted2_mask_np = repasted2_mask_np/255.        
-                repasted2_mask_np = create_mask(repasted2_np)
-                repasted2_np, _ = holefill_and_repaste(large_image_np, repasted2_np, repasted2_mask_np, large_mask_np)
-                # ============================================================
 
         # return     
         print("=======> RUN function time --- %s seconds ---" % (time.time() - start_run))
@@ -590,8 +580,9 @@ def upload_cloudinary(filename, width, height):
 
 
 def process_image(prompt, filename, filePath, jobId):
-    print("HERE IN PROCESS IMAGE FUNCTION " ) 
-    
+    print("HERE IN PROCESS IMAGE FUNCTION " )
+    results = []
+    outputs = []
     output_image_name = ''
     img_url = ''
     try:
@@ -611,24 +602,60 @@ def process_image(prompt, filename, filePath, jobId):
             img_url = upload_cloudinary(filename, 1024, 1024)
             file_extension = get_file_extension(filename)
             impath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            gen_image_np, repasted_np, extras,inp_image_np = run(impath=impath, prompt=prompt)
-            print("RECEIVED OUTPUT FROM RUN FUNCTUON " ) 
-            output_image_name = filename.replace('.'+ file_extension, '') + "-generated.png"
-            output_path = os.path.join(app.config['UPLOAD_FOLDER'],output_image_name)
 
-            print("FILENAME--- "+ os.path.join(app.config['UPLOAD_FOLDER'],filename))
-            print("OUTPUT FILENAME--  "+ os.path.join(app.config['UPLOAD_FOLDER'],output_image_name))
+            with concurrent.futures.ProcessPoolExecutor() as executor:
+                # Submit the image processing tasks asynchronously
+                futures = []
+                num_of_images = 2
+                count = 0
+                for count in num_of_images:
+                    future = executor.submit(run, impath, prompt)
+                    futures.append(future)
+                    count = count + 1
+                    print("HERE IN SUBMITTING IMAGES PROCESSED")
 
-            Image.fromarray((repasted_np * 255).astype(np.uint8)).save(output_path)
+                # Retrieve the results as they become available
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        result = future.result()
+                        results.append(result)
+                        print("HERE COMPLETED")
+                    except Exception as e:
+                        print(f"Error processing image: {e}")
 
-            outPut_image_url_1024 = upload_cloudinary(output_image_name, 1024, 1024)
-            outPut_image_url_512 = upload_cloudinary(output_image_name, 512, 512 )
+            count = 1
+            for result in results:
+                print("HERE IN RESULTS")
+                gen_image_np, repasted_np, extras,inp_image_np = result
 
-            print("OUTPUT IMAGE 1024" + outPut_image_url_1024)
+                output_image_name = filename.replace('.' + file_extension, '') + count + "--generated.png"
 
-    #        os.remove(os.path.join(app.config['UPLOAD_FOLDER'],filename))
-     #       os.remove(os.path.join(app.config['UPLOAD_FOLDER'],output_image_name))
-            print("TASKS WAS SUCCESSFUL WITH URL " + outPut_image_url_512 ) 
+                output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_image_name)
+                # print("FILENAME--- " + os.path.join(app.config['UPLOAD_FOLDER'], filename))
+
+                Image.fromarray((repasted_np * 255).astype(np.uint8)).save(output_path)
+                outPut_image_url_512 = upload_cloudinary(output_image_name, 512, 512)
+                print("OUTPUT IMAGE 512--- " + count + "-" + outPut_image_url_512)
+                # os.remove(os.path.join(app.config['UPLOAD_FOLDER'], output_path))
+
+                outputs.append(outPut_image_url_512)
+                count = count + 1
+
+
+
+            # gen_image_np, repasted_np, extras,inp_image_np = run(impath=impath, prompt=prompt)
+            # print("RECEIVED OUTPUT FROM RUN FUNCTUON " )
+            # output_image_name = filename.replace('.'+ file_extension, '') + "-generated.png"
+            # output_path = os.path.join(app.config['UPLOAD_FOLDER'],output_image_name)
+            #
+            # print("FILENAME--- "+ os.path.join(app.config['UPLOAD_FOLDER'],filename))
+            # print("OUTPUT FILENAME--  "+ os.path.join(app.config['UPLOAD_FOLDER'],output_image_name))
+            #
+            # Image.fromarray((repasted_np * 255).astype(np.uint8)).save(output_path)
+            # outPut_image_url_1024 = upload_cloudinary(output_image_name, 1024, 1024)
+            # outPut_image_url_512 = upload_cloudinary(output_image_name, 512, 512 )
+            # print("OUTPUT IMAGE 1024" + outPut_image_url_1024)
+            # print("TASKS WAS SUCCESSFUL WITH URL " + outPut_image_url_512 )
     
     except Exception as e:
         print("An error occurred:  TASK WAS UNSUCCESSFUL", str(e))
