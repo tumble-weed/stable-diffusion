@@ -775,7 +775,7 @@ def get_file_extension(filename):
 
 
 
-@app.route("/taskQueueSample",methods=['GET', 'POST'])
+@app.route("/taskQueue",methods=['GET', 'POST'])
 def taskQueueProcessor():
     output_image_name = ''
     filename = ''
@@ -807,13 +807,13 @@ def taskQueueProcessor():
 stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
             subprocesses.append(process)
 
-            for line in iter(process.stdout.readline, b''):
-                line = line.decode('utf-8') 
-                print(">>> " + line.rstrip())
-            process.communicate()
+         #   for line in iter(process.stdout.readline, b''):
+         #       line = line.decode('utf-8') 
+         #       print(">>> " + line.rstrip())
+         #   process.communicate()
             print("TASK ADDED TO QUEUE" ) 
         return jsonify({'msg': 'success',
-                        jobId: jobId})
+                        'jobId': jobId})
     except Exception as e:
         print("An error occurred:", str(e))
         return jsonify({'msg': 'failure',
